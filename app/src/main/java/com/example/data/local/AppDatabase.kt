@@ -26,7 +26,7 @@ import com.example.data.model.UserSettingsEntity
         UserSettingsEntity::class
     ],
     version = 4,
-    exportSchema = false
+    exportSchema = true
 )
 @TypeConverters(RoomConverters::class)
 abstract class AppDatabase : RoomDatabase() {

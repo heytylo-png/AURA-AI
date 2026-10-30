@@ -1,0 +1,84 @@
+# Runs Aura's unit tests on GitHub's servers on every push and pull request,
+# so changes can be checked without building on a computer.
+# Results: open the repository in the GitHub app > Actions.
+
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # The repository has no Gradle wrapper script, so install the version
+      # named in gradle/wrapper/gradle-wrapper.properties.
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      # debug.keystore is git-ignored, but the debug build config points at it.
+      # Create a throwaway one on the CI machine only. It is never uploaded.
+      - name: Create throwaway debug keystore
+        run: |
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -keystore debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest --stacktrace
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
+
+      # Room writes app/schemas/<version>.json during the build. If the build
+      # produced a schema file that is not committed, flag it so it gets added.
+      - name: Check Room schema files are committed
+        if: always()
+        run: |
+          changes="$(git status --porcelain -- app/schemas)"
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "::warning title=Room schema not committed::Download the room-schemas artifact and commit app/schemas/ to the branch."
+          else
+            echo "Room schema files are up to date."
+          fi
+
+      - name: Upload Room schema files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schemas
+          path: app/schemas/
+          if-no-files-found: ignore

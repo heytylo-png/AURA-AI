@@ -70,6 +70,13 @@ android {
   }
 }
 
+// Room writes a JSON snapshot of the database schema here on every build.
+// These files are committed to git so future migrations can be written and tested
+// against the exact previous schema. Never edit them by hand.
+ksp {
+  arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
 secrets {
