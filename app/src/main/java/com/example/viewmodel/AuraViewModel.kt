@@ -42,6 +42,7 @@ import com.example.data.model.ResponseLength
 import com.example.data.model.UserSettingsEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -95,6 +96,7 @@ class AuraViewModel @JvmOverloads constructor(
 
     private val hybridAiEngine = HybridAiEngine(application)
     private val identityPrefs = application.getSharedPreferences("aura_identity_prefs", Context.MODE_PRIVATE)
+    private val memoryPrefs = application.getSharedPreferences("aura_memory_prefs", Context.MODE_PRIVATE)
 
     // Identity configuration loaded from SharedPreferences to survive app restarts
     private val _identity = MutableStateFlow(loadPersistedIdentity())
@@ -496,7 +498,17 @@ class AuraViewModel @JvmOverloads constructor(
 
     fun deleteMemory(memory: MemoryEntity) {
         viewModelScope.launch {
+            // A deliberate deletion must not cause starter memories to reappear.
+            memoryPrefs.edit().putBoolean("memory_initialized", true).apply()
             memoryRepository.deleteMemory(memory)
+        }
+    }
+
+    fun clearAllMemories() {
+        viewModelScope.launch {
+            // This operation is intentionally limited to the memories table.
+            memoryPrefs.edit().putBoolean("memory_initialized", true).apply()
+            memoryRepository.clearAllMemories()
         }
     }
 
@@ -660,29 +672,34 @@ class AuraViewModel @JvmOverloads constructor(
                 loadChatMessages()
             }
 
-            val existingMemories = memoryRepository.getActiveMemories()
-            if (existingMemories.isEmpty()) {
-                memoryRepository.insertMemory(
-                    MemoryEntity(
-                        content = "User prefers clear, structured breakdowns with actionable next steps.",
-                        category = MemoryCategory.PREFERENCE,
-                        importance = 5
+            // Seed starter memories only once. Count all rows (not just active ones),
+            // and persist the initialization marker so a deliberate clear survives restarts.
+            if (!memoryPrefs.getBoolean("memory_initialized", false)) {
+                val existingMemoryCount = memoryRepository.getMemoriesCount().first()
+                if (existingMemoryCount == 0) {
+                    memoryRepository.insertMemory(
+                        MemoryEntity(
+                            content = "User prefers clear, structured breakdowns with actionable next steps.",
+                            category = MemoryCategory.PREFERENCE,
+                            importance = 5
+                        )
                     )
-                )
-                memoryRepository.insertMemory(
-                    MemoryEntity(
-                        content = "Focuses on modern Android, Kotlin, and Jetpack Compose architecture.",
-                        category = MemoryCategory.CONTEXT,
-                        importance = 4
+                    memoryRepository.insertMemory(
+                        MemoryEntity(
+                            content = "Focuses on modern Android, Kotlin, and Jetpack Compose architecture.",
+                            category = MemoryCategory.CONTEXT,
+                            importance = 4
+                        )
                     )
-                )
-                memoryRepository.insertMemory(
-                    MemoryEntity(
-                        content = "Goal: Build a high-autonomy personal AI ecosystem with human approval loops.",
-                        category = MemoryCategory.GOAL,
-                        importance = 5
+                    memoryRepository.insertMemory(
+                        MemoryEntity(
+                            content = "Goal: Build a high-autonomy personal AI ecosystem with human approval loops.",
+                            category = MemoryCategory.GOAL,
+                            importance = 5
+                        )
                     )
-                )
+                }
+                memoryPrefs.edit().putBoolean("memory_initialized", true).apply()
             }
 
             val existingProjects = projectRepository.getAllProjectsSnapshot()
