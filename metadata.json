@@ -1,0 +1,6 @@
+{
+  "name": "Aura",
+  "description": "Hybrid personal AI with persistent memory, project library, voice interaction, and task execution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
