@@ -555,7 +555,10 @@ class ExampleRobolectricTest {
             ChatMessageEntity(sender = Sender.USER, text = "Chat that must remain")
         )
         val projectId = projectRepository.insertProject(
-            com.example.data.model.ProjectEntity(title = "Project that must remain")
+            com.example.data.model.ProjectEntity(
+                title = "Project that must remain",
+                description = "Regression test project"
+            )
         )
 
         memoryRepository.clearAllMemories()
