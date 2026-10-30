@@ -68,6 +68,8 @@ fun MemoryScreen(viewModel: AuraViewModel) {
     val selectedCategory by viewModel.selectedMemoryCategory.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
+    var memoryPendingDelete by remember { mutableStateOf<MemoryEntity?>(null) }
+    var showClearAllDialog by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -87,7 +89,7 @@ fun MemoryScreen(viewModel: AuraViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "Persistent Memory",
                                 style = MaterialTheme.typography.titleLarge,
@@ -99,6 +101,15 @@ fun MemoryScreen(viewModel: AuraViewModel) {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+
+                        if (allMemories.isNotEmpty()) {
+                            TextButton(
+                                onClick = { showClearAllDialog = true },
+                                modifier = Modifier.testTag("clear_all_memories_button")
+                            ) {
+                                Text("Clear all", color = MaterialTheme.colorScheme.error)
+                            }
                         }
 
                         Icon(
@@ -187,7 +198,7 @@ fun MemoryScreen(viewModel: AuraViewModel) {
                         MemoryItemCard(
                             memory = memory,
                             onToggleActive = { viewModel.toggleMemoryActive(memory) },
-                            onDelete = { viewModel.deleteMemory(memory) }
+                            onDelete = { memoryPendingDelete = memory }
                         )
                     }
                 }
@@ -205,6 +216,44 @@ fun MemoryScreen(viewModel: AuraViewModel) {
         ) {
             Icon(Icons.Default.Add, contentDescription = "Add Memory", tint = MaterialTheme.colorScheme.onPrimary)
         }
+    }
+
+    memoryPendingDelete?.let { memory ->
+        AlertDialog(
+            onDismissRequest = { memoryPendingDelete = null },
+            title = { Text("Delete memory?") },
+            text = { Text("Delete this saved memory? This cannot be undone.") },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.deleteMemory(memory)
+                    memoryPendingDelete = null
+                }, modifier = Modifier.testTag("confirm_delete_memory_button")) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { memoryPendingDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showClearAllDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearAllDialog = false },
+            title = { Text("Clear all memories?") },
+            text = { Text("This permanently deletes all saved memories. Your chats, projects, and tasks will not be affected.") },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.clearAllMemories()
+                    showClearAllDialog = false
+                }, modifier = Modifier.testTag("confirm_clear_all_memories_button")) {
+                    Text("Clear all")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearAllDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 
     if (showAddDialog) {
