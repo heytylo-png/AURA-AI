@@ -34,7 +34,7 @@ sealed interface HybridAiState {
 class HybridAiEngine(
     private val context: Context,
     private val localEngine: LocalModelEngine = LocalModelEngine(),
-    private val cloudEngine: CloudModelEngine = CloudModelEngine()
+    private val cloudEngine: AiProvider = CloudModelEngine()
 ) {
 
     private fun isOnline(): Boolean {
@@ -104,14 +104,23 @@ class HybridAiEngine(
         var lastStreamedText = ""
 
         try {
-            cloudEngine.generateContentStream(prompt, identity, activeMemories, currentProject, userSettings)
-                .collect { chunk ->
+            cloudEngine.generateStream(
+                AiProviderRequest(
+                    prompt = prompt,
+                    identity = identity,
+                    activeMemories = activeMemories,
+                    currentProject = currentProject,
+                    userSettings = userSettings,
+                    // Cloud sharing stays disabled until the user explicitly opts in.
+                    allowPersonalContext = false
+                )
+            ).collect { chunk ->
                     when (chunk) {
-                        is CloudAiStreamChunk.Content -> {
+                        is AiProviderEvent.Content -> {
                             lastStreamedText = chunk.text
                             emit(HybridAiState.Streaming(chunk.text, AiModelUsed.CLOUD))
                         }
-                        is CloudAiStreamChunk.Completed -> {
+                        is AiProviderEvent.Completed -> {
                             cloudCompleted = true
                             // Check if prompt inspired an action proposal even in cloud
                             val localScan = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
@@ -125,7 +134,7 @@ class HybridAiEngine(
                                 )
                             )
                         }
-                        is CloudAiStreamChunk.Error -> {
+                        is AiProviderEvent.Error -> {
                             if (lastStreamedText.isBlank()) {
                                 val localFallback = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
                                 emit(
