@@ -617,63 +617,24 @@ class AuraViewModel @JvmOverloads constructor(
 
     private fun seedInitialDataIfNeeded() {
         viewModelScope.launch {
-            // Seed initial sessions for persistent drawer
-            val firstSession = chatRepository.getSessionById(1L)
-            if (firstSession == null) {
-                val s1 = chatRepository.createNewSession("General AI Exploration")
-                val s2 = chatRepository.createNewSession("Aura AI Architecture")
-                val s3 = chatRepository.createNewSession("Autonomous Task Orchestrator")
-                val s4 = chatRepository.createNewSession("Kotlin Compose Guidelines")
-                val s5 = chatRepository.createNewSession("Personal AI Directives")
-
-                chatRepository.insertMessage(
-                    ChatMessageEntity(
-                        sender = Sender.AI,
-                        text = "Hello! I am Aura, your hybrid personal AI companion. How can I assist your workflow today?",
-                        sessionId = s1
-                    )
-                )
-                chatRepository.insertMessage(
-                    ChatMessageEntity(
-                        sender = Sender.AI,
-                        text = "Aura combines local low-latency intelligence with Gemini cloud reasoning for high-complexity tasks.",
-                        sessionId = s2
-                    )
-                )
-                chatRepository.insertMessage(
-                    ChatMessageEntity(
-                        sender = Sender.AI,
-                        text = "Task orchestration engine ready. All high-impact actions require your verified approval.",
-                        sessionId = s3
-                    )
-                )
-                chatRepository.insertMessage(
-                    ChatMessageEntity(
-                        sender = Sender.AI,
-                        text = "Jetpack Compose UI is running with Material 3 dynamic theming and reactive state flows.",
-                        sessionId = s4
-                    )
-                )
-                chatRepository.insertMessage(
-                    ChatMessageEntity(
-                        sender = Sender.AI,
-                        text = "Personal directives active. Active memories and user context are automatically injected into reasoning prompts.",
-                        sessionId = s5
-                    )
-                )
-
-                val active = chatRepository.getSessionById(s1)
-                if (_activeSession.value == null) {
-                    _activeSession.value = active
-                    loadChatMessages()
+            // Do not recreate demo conversations or projects on startup.
+            // Create one empty conversation only when the user has none.
+            val sessions = chatRepository.getAllSessions().first()
+            val activeSession = _activeSession.value
+            val sessionToUse = activeSession?.let { chatRepository.getSessionById(it.id) }
+                ?: sessions.firstOrNull()
+                ?: run {
+                    val newId = chatRepository.createNewSession("New Conversation")
+                    chatRepository.getSessionById(newId)
                 }
-            } else if (_activeSession.value == null) {
-                _activeSession.value = firstSession
+
+            if (_activeSession.value == null && sessionToUse != null) {
+                _activeSession.value = sessionToUse
                 loadChatMessages()
             }
 
-            // Seed starter memories only once. Count all rows (not just active ones),
-            // and persist the initialization marker so a deliberate clear survives restarts.
+            // Starter memories are retained as a separate, one-time initialization
+            // policy. A deliberate deletion is protected by memory_initialized.
             if (!memoryPrefs.getBoolean("memory_initialized", false)) {
                 val existingMemoryCount = memoryRepository.getMemoriesCount().first()
                 if (existingMemoryCount == 0) {
@@ -699,45 +660,7 @@ class AuraViewModel @JvmOverloads constructor(
                         )
                     )
                 }
-                memoryPrefs.edit().putBoolean("memory_initialized", true).apply()
-            }
-
-            val existingProjects = projectRepository.getAllProjectsSnapshot()
-            if (existingProjects.isEmpty()) {
-                val p1 = projectRepository.insertProject(
-                    ProjectEntity(
-                        title = "Aura AI Architecture",
-                        description = "Next-gen hybrid personal AI combining on-device local models with Gemini 3.8 Flash cloud reasoning.",
-                        category = "AI & Tech",
-                        status = ProjectStatus.IN_PROGRESS,
-                        colorHex = "#00F2FE"
-                    )
-                )
-                projectRepository.insertMilestone(
-                    MilestoneEntity(projectId = p1, title = "Persistent Memory & Knowledge Retrieval", isCompleted = true)
-                )
-                projectRepository.insertMilestone(
-                    MilestoneEntity(projectId = p1, title = "Voice Interface & Reactive Orb Visualizer", isCompleted = true)
-                )
-                projectRepository.insertMilestone(
-                    MilestoneEntity(projectId = p1, title = "Human-in-the-Loop Action Approval Protocol", isCompleted = true)
-                )
-
-                val p2 = projectRepository.insertProject(
-                    ProjectEntity(
-                        title = "Autonomous Task Orchestrator",
-                        description = "System for decomposing complex goals into sequential verified tasks with safety checkpoints.",
-                        category = "Work & Automation",
-                        status = ProjectStatus.PLANNING,
-                        colorHex = "#9D4EDD"
-                    )
-                )
-                projectRepository.insertMilestone(
-                    MilestoneEntity(projectId = p2, title = "Define Action Schema & Task Entity", isCompleted = true)
-                )
-                projectRepository.insertMilestone(
-                    MilestoneEntity(projectId = p2, title = "Implement Verification & Audit Trail", isCompleted = false)
-                )
+                memoryPrefs.edit().putBoolean("memory_initialized", true).commit()
             }
         }
     }
