@@ -9,6 +9,7 @@ import com.example.data.model.MemoryEntity
 import com.example.data.model.ProjectEntity
 import com.example.data.model.TaskActionEntity
 import com.example.data.model.UserSettingsEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
@@ -104,17 +105,15 @@ class HybridAiEngine(
         var lastStreamedText = ""
 
         try {
-            cloudEngine.generateStream(
-                AiProviderRequest(
-                    prompt = prompt,
-                    identity = identity,
-                    activeMemories = activeMemories,
-                    currentProject = currentProject,
-                    userSettings = userSettings,
-                    // Cloud sharing stays disabled until the user explicitly opts in.
-                    allowPersonalContext = false
-                )
-            ).collect { chunk ->
+            val providerRequest = AiProviderRequest(
+                prompt = prompt,
+                identity = identity,
+                activeMemories = activeMemories,
+                currentProject = currentProject,
+                userSettings = userSettings
+            ).withoutPersonalContext()
+
+            cloudEngine.generateStream(providerRequest).collect { chunk ->
                     when (chunk) {
                         is AiProviderEvent.Content -> {
                             lastStreamedText = chunk.text
@@ -160,6 +159,9 @@ class HybridAiEngine(
                         }
                     }
                 }
+        } catch (e: CancellationException) {
+            // A cancelled chat/request must stop; it must not launch fallback work.
+            throw e
         } catch (e: Exception) {
             val localFallback = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
             emit(
