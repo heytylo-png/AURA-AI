@@ -9,6 +9,7 @@ import com.example.data.model.MemoryEntity
 import com.example.data.model.ProjectEntity
 import com.example.data.model.TaskActionEntity
 import com.example.data.model.UserSettingsEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
@@ -34,10 +35,12 @@ sealed interface HybridAiState {
 class HybridAiEngine(
     private val context: Context,
     private val localEngine: LocalModelEngine = LocalModelEngine(),
-    private val cloudEngine: CloudModelEngine = CloudModelEngine()
+    private val cloudEngine: AiProvider = CloudModelEngine(),
+    private val onlineStatusOverride: (() -> Boolean)? = null
 ) {
 
     private fun isOnline(): Boolean {
+        onlineStatusOverride?.let { return it() }
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
         val network = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(network) ?: return false
@@ -104,14 +107,21 @@ class HybridAiEngine(
         var lastStreamedText = ""
 
         try {
-            cloudEngine.generateContentStream(prompt, identity, activeMemories, currentProject, userSettings)
-                .collect { chunk ->
+            val providerRequest = AiProviderRequest(
+                prompt = prompt,
+                identity = identity,
+                activeMemories = activeMemories,
+                currentProject = currentProject,
+                userSettings = userSettings
+            ).withoutPersonalContext()
+
+            cloudEngine.generateStream(providerRequest).collect { chunk ->
                     when (chunk) {
-                        is CloudAiStreamChunk.Content -> {
+                        is AiProviderEvent.Content -> {
                             lastStreamedText = chunk.text
                             emit(HybridAiState.Streaming(chunk.text, AiModelUsed.CLOUD))
                         }
-                        is CloudAiStreamChunk.Completed -> {
+                        is AiProviderEvent.Completed -> {
                             cloudCompleted = true
                             // Check if prompt inspired an action proposal even in cloud
                             val localScan = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
@@ -125,7 +135,7 @@ class HybridAiEngine(
                                 )
                             )
                         }
-                        is CloudAiStreamChunk.Error -> {
+                        is AiProviderEvent.Error -> {
                             if (lastStreamedText.isBlank()) {
                                 val localFallback = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
                                 emit(
@@ -151,6 +161,9 @@ class HybridAiEngine(
                         }
                     }
                 }
+        } catch (e: CancellationException) {
+            // A cancelled chat/request must stop; it must not launch fallback work.
+            throw e
         } catch (e: Exception) {
             val localFallback = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
             emit(
