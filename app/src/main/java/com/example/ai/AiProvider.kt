@@ -42,3 +42,16 @@ interface AiProvider {
 
     fun generateStream(request: AiProviderRequest): Flow<AiProviderEvent>
 }
+
+
+/**
+ * Removes every personal-context field before a request crosses the cloud
+ * provider boundary. Keep this as the default until a consent and sensitivity
+ * filtering policy is implemented centrally.
+ */
+internal fun AiProviderRequest.withoutPersonalContext(): AiProviderRequest = copy(
+    activeMemories = emptyList(),
+    currentProject = null,
+    userSettings = null,
+    allowPersonalContext = false
+)
