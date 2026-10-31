@@ -15,6 +15,7 @@ import com.example.data.repository.DefaultChatRepository
 import com.example.viewmodel.ConversationViewModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -566,6 +567,77 @@ class ExampleRobolectricTest {
         assertEquals(0, memoryRepository.getMemoriesCount().first())
         assertTrue(chatRepository.getGlobalMessages().first().any { it.text == "Chat that must remain" })
         assertNotNull(projectRepository.getProjectById(projectId))
+    }
+
+
+    @Test
+    fun `startup creates one empty conversation and never reseeds demo data`() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val db = AppDatabase.createInMemory(app)
+        val chatRepo = DefaultChatRepository(db.chatMessageDao(), db.chatSessionDao())
+        val memoryRepo = com.example.data.repository.DefaultMemoryRepository(db.memoryDao())
+        val projectRepo = com.example.data.repository.DefaultProjectRepository(db.projectDao())
+        app.getSharedPreferences("aura_memory_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("memory_initialized", true).commit()
+
+        val firstViewModel = com.example.viewmodel.AuraViewModel(
+            application = app,
+            chatRepository = chatRepo,
+            memoryRepository = memoryRepo,
+            projectRepository = projectRepo
+        )
+        withTimeout(5_000) { firstViewModel.activeSession.first { it != null } }
+
+        val sessionsAfterFirstStart = chatRepo.getAllSessions().first()
+        assertEquals(1, sessionsAfterFirstStart.size)
+        assertEquals("New Conversation", sessionsAfterFirstStart.single().title)
+        assertTrue(chatRepo.getMessagesForSession(sessionsAfterFirstStart.single().id).first().isEmpty())
+        assertTrue(projectRepo.getAllProjectsSnapshot().isEmpty())
+
+        val secondViewModel = com.example.viewmodel.AuraViewModel(
+            application = app,
+            chatRepository = chatRepo,
+            memoryRepository = memoryRepo,
+            projectRepository = projectRepo
+        )
+        withTimeout(5_000) { secondViewModel.activeSession.first { it != null } }
+
+        assertEquals(1, chatRepo.getAllSessions().first().size)
+        assertTrue(projectRepo.getAllProjectsSnapshot().isEmpty())
+        db.close()
+    }
+
+    @Test
+    fun `startup reuses existing conversations without adding demo sessions`() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val db = AppDatabase.createInMemory(app)
+        val chatRepo = DefaultChatRepository(db.chatMessageDao(), db.chatSessionDao())
+        val memoryRepo = com.example.data.repository.DefaultMemoryRepository(db.memoryDao())
+        val projectRepo = com.example.data.repository.DefaultProjectRepository(db.projectDao())
+        app.getSharedPreferences("aura_memory_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("memory_initialized", true).commit()
+
+        val existingId = chatRepo.createNewSession("My Existing Conversation")
+        chatRepo.insertMessage(
+            ChatMessageEntity(sender = Sender.USER, text = "Keep this conversation", sessionId = existingId)
+        )
+
+        val viewModel = com.example.viewmodel.AuraViewModel(
+            application = app,
+            chatRepository = chatRepo,
+            memoryRepository = memoryRepo,
+            projectRepository = projectRepo
+        )
+        val active = withTimeout(5_000) { viewModel.activeSession.first { it != null } }
+
+        assertEquals(existingId, active?.id)
+        assertEquals(1, chatRepo.getAllSessions().first().size)
+        assertEquals(
+            "Keep this conversation",
+            chatRepo.getMessagesForSession(existingId).first().single().text
+        )
+        assertTrue(projectRepo.getAllProjectsSnapshot().isEmpty())
+        db.close()
     }
 
 }
