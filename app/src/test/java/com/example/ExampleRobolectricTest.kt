@@ -533,4 +533,39 @@ class ExampleRobolectricTest {
 
         db.close()
     }
+
+    @Test
+    fun `clearing memories leaves chats and projects untouched`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = AppDatabase.getInstance(context)
+        val memoryRepository = com.example.data.repository.DefaultMemoryRepository(db.memoryDao())
+        val chatRepository = DefaultChatRepository(db.chatMessageDao())
+        val projectRepository = com.example.data.repository.DefaultProjectRepository(db.projectDao())
+
+        memoryRepository.clearAllMemories()
+        chatRepository.clearGlobalChat()
+
+        memoryRepository.insertMemory(
+            com.example.data.model.MemoryEntity(
+                content = "Memory to clear",
+                category = com.example.data.model.MemoryCategory.PREFERENCE
+            )
+        )
+        chatRepository.insertMessage(
+            ChatMessageEntity(sender = Sender.USER, text = "Chat that must remain")
+        )
+        val projectId = projectRepository.insertProject(
+            com.example.data.model.ProjectEntity(
+                title = "Project that must remain",
+                description = "Regression test project"
+            )
+        )
+
+        memoryRepository.clearAllMemories()
+
+        assertEquals(0, memoryRepository.getMemoriesCount().first())
+        assertTrue(chatRepository.getGlobalMessages().first().any { it.text == "Chat that must remain" })
+        assertNotNull(projectRepository.getProjectById(projectId))
+    }
+
 }
