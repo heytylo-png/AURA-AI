@@ -35,10 +35,12 @@ sealed interface HybridAiState {
 class HybridAiEngine(
     private val context: Context,
     private val localEngine: LocalModelEngine = LocalModelEngine(),
-    private val cloudEngine: AiProvider = CloudModelEngine()
+    private val cloudEngine: AiProvider = CloudModelEngine(),
+    private val onlineStatusOverride: (() -> Boolean)? = null
 ) {
 
     private fun isOnline(): Boolean {
+        onlineStatusOverride?.let { return it() }
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
         val network = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(network) ?: return false
