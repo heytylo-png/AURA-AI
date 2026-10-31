@@ -34,6 +34,16 @@ import org.robolectric.annotation.Config
 @Config(sdk = [36])
 class ExampleRobolectricTest {
 
+    @Before
+    fun setMainDispatcherForViewModelTests() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+    }
+
+    @After
+    fun resetMainDispatcherAfterTests() {
+        Dispatchers.resetMain()
+    }
+
     @Test
     fun `read string from context`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -401,6 +411,9 @@ class ExampleRobolectricTest {
         val sessionDao = db.chatSessionDao()
         val messageDao = db.chatMessageDao()
         val repository = DefaultChatRepository(messageDao, sessionDao)
+
+        // Isolate this ordering test from sessions left by other tests.
+        repository.getAllSessions().first().forEach { repository.deleteSession(it.id) }
 
         // Create 6 sessions
         for (i in 1..6) {
