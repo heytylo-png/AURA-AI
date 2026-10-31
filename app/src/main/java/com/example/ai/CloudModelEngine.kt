@@ -11,7 +11,6 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeout
-
 import com.example.data.model.UserSettingsEntity
 
 private const val TAG = "CloudModelEngine"
@@ -22,16 +21,45 @@ sealed interface CloudAiStreamChunk {
     data class Error(val message: String) : CloudAiStreamChunk
 }
 
-class CloudModelEngine {
+/** Gemini is the first adapter behind Aura's provider-neutral contract. */
+class CloudModelEngine : AiProvider {
 
-    // Lazy initialization mandated by Firebase AI Logic skill to prevent early startup crashes
+    override val providerId: String = "gemini"
+    override val capabilities = AiProviderCapabilities(
+        streaming = true,
+        supportsPersonalContext = true,
+        supportsOffline = false
+    )
+
+    // Lazy initialization prevents early startup crashes.
     private val model by lazy {
         Firebase.ai.generativeModel("gemini-3.8-flash")
     }
 
+    override fun generateStream(request: AiProviderRequest): Flow<AiProviderEvent> = flow {
+        // Personal context is denied unless this specific request carries explicit consent.
+        val memories = if (request.allowPersonalContext) request.activeMemories else emptyList()
+        val project = if (request.allowPersonalContext) request.currentProject else null
+        val settings = if (request.allowPersonalContext) request.userSettings else null
+
+        generateContentStream(
+            prompt = request.prompt,
+            identity = request.identity,
+            activeMemories = memories,
+            currentProject = project,
+            userSettings = settings
+        ).collect { chunk ->
+            when (chunk) {
+                is CloudAiStreamChunk.Content -> emit(AiProviderEvent.Content(chunk.text))
+                is CloudAiStreamChunk.Completed -> emit(AiProviderEvent.Completed(chunk.fullText, chunk.latencyMs))
+                is CloudAiStreamChunk.Error -> emit(AiProviderEvent.Error(chunk.message))
+            }
+        }
+    }
+
     /**
-     * Builds a comprehensive prompt with Aura's custom identity, persistent memory facts,
-     * active project context, and personalized user profile settings stored in Room Database.
+     * Builds Aura's identity prompt. Personal context parameters must already
+     * have passed the request-level consent gate above.
      */
     fun buildContextualPrompt(
         userMessage: String,
@@ -46,7 +74,7 @@ class CloudModelEngine {
             val nameGuidance = if (userSettings.userName.isNotBlank()) "address the user by their name (${userSettings.userName.trim()}) naturally, and " else ""
             val interestGuidance = if (userSettings.primaryInterest.isNotBlank()) "tailor insights, recommendations, and examples to their primary interest (${userSettings.primaryInterest.trim()})." else "provide helpful answers."
             "\n[USER PERSONALIZATION SETTINGS]\n$nameLine$interestLine" +
-            "Personalization Directive: Always $nameGuidance$interestGuidance\n"
+                "Personalization Directive: Always $nameGuidance$interestGuidance\n"
         } else ""
 
         val memoryBlock = if (activeMemories.isNotEmpty()) {
@@ -71,9 +99,6 @@ User Query: $userMessage
 """.trimIndent()
     }
 
-    /**
-     * Streams content from Gemini 3.8 Flash with 8s timeout and cooperative cancellation.
-     */
     fun generateContentStream(
         prompt: String,
         identity: AiIdentityConfig,
@@ -86,7 +111,6 @@ User Query: $userMessage
         val accumulatedText = StringBuilder()
 
         try {
-            // Responsive timeout for initial cloud connection & streaming (8s)
             withTimeout(8_000L) {
                 model.generateContentStream(fullPrompt).collect { chunk ->
                     val chunkText = chunk.text.orEmpty()
@@ -99,20 +123,18 @@ User Query: $userMessage
 
             val finalOutput = accumulatedText.toString()
             if (finalOutput.isNotBlank()) {
-                val totalTime = System.currentTimeMillis() - startTime
-                emit(CloudAiStreamChunk.Completed(finalOutput, totalTime))
+                emit(CloudAiStreamChunk.Completed(finalOutput, System.currentTimeMillis() - startTime))
             } else {
                 emit(CloudAiStreamChunk.Error("Gemini 3.8 Flash returned an empty response."))
             }
         } catch (e: TimeoutCancellationException) {
-            Log.w(TAG, "Cloud generation timed out after 8s; seamlessly delegating to local model.")
+            Log.w(TAG, "Cloud generation timed out after 8s.")
             emit(CloudAiStreamChunk.Error("Cloud connection timed out after 8s."))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "Firebase AI generation error: ${e.message}")
-            val msg = e.localizedMessage ?: "Cloud AI model failed to connect."
-            emit(CloudAiStreamChunk.Error(msg))
+            emit(CloudAiStreamChunk.Error(e.localizedMessage ?: "Cloud AI model failed to connect."))
         }
     }
 }
