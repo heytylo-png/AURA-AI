@@ -28,10 +28,7 @@ import org.junit.Test
 class AiProviderContractTest {
 
     private class FakeProvider(
-        private val stream: Flow<AiProviderEvent> = flow {
-            emit(AiProviderEvent.Content("response"))
-            emit(AiProviderEvent.Completed("response", 1L))
-        }
+        private val stream: Flow<AiProviderEvent>? = null
     ) : AiProvider {
         override val providerId = "test-provider"
         override val capabilities = AiProviderCapabilities(
@@ -43,7 +40,10 @@ class AiProviderContractTest {
 
         override fun generateStream(request: AiProviderRequest): Flow<AiProviderEvent> {
             receivedRequest = request
-            return stream
+            return stream ?: flow {
+                emit(AiProviderEvent.Content(request.prompt))
+                emit(AiProviderEvent.Completed(request.prompt, 1L))
+            }
         }
     }
 
