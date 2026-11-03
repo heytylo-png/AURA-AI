@@ -26,7 +26,9 @@ import com.example.data.model.UserSettingsEntity
         UserSettingsEntity::class
     ],
     version = 4,
-    exportSchema = false
+    // Room writes the schema of every version to app/schemas/ (committed to git), so
+    // future migrations can be written and tested against the exact previous schema.
+    exportSchema = true
 )
 @TypeConverters(RoomConverters::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -83,7 +85,9 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 DATABASE_NAME
             )
-                .fallbackToDestructiveMigration()
+                // No destructive fallback: a schema change without a matching Migration must
+                // fail loudly instead of silently deleting the user's memories, chats and projects.
+                // Every version bump needs .addMigrations(MIGRATION_x_y) and a migration test.
                 .build()
         }
 
