@@ -39,6 +39,20 @@ jobs:
       - name: Run unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
 
+      # Room regenerates app/schemas/ during the build. If the generated schema differs from
+      # the committed one (or is not committed), the database changed without its schema
+      # being recorded, so a migration may be missing. Fail instead of letting that merge.
+      - name: Check Room schema files are committed and current
+        run: |
+          changes="$(git status --porcelain --untracked-files=all -- app/schemas)"
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            git diff -- app/schemas || true
+            echo "::error title=Room schema not committed::The build generated app/schemas changes that are not committed. Commit app/schemas/ and add a Migration for any version change."
+            exit 1
+          fi
+          echo "Room schema files are committed and match the build."
+
       - name: Create temporary debug signing key
         run: keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
 
