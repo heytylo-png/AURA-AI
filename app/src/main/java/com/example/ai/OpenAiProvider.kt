@@ -1,6 +1,5 @@
 package com.example.ai
 
-import com.example.data.model.AiIdentityConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -66,7 +65,7 @@ class OpenAiProvider(
         val payload = JSONObject()
             .put("stream", true)
             .put("messages", JSONArray().apply {
-                put(JSONObject().put("role", "system").put("content", identityPrompt(request.identity)))
+                put(JSONObject().put("role", "system").put("content", identityPrompt()))
                 put(JSONObject().put("role", "user").put("content", request.prompt))
             })
             .toString()
@@ -138,13 +137,12 @@ class OpenAiProvider(
         }
     }.flowOn(Dispatchers.IO)
 
-    internal fun identityPrompt(identity: AiIdentityConfig): String = """
-        You are ${identity.name}, Aura's AI assistant.
-        Personality: ${identity.archetype.title}.
-        Guidance: ${identity.archetype.traitPrompt}
-        Core values: ${identity.coreValues}
-        Response style: ${identity.responseLength.label}
-        Additional instructions: ${identity.customDirectives}
+    // Keep the cloud system prompt static. User-editable identity fields can contain
+    // personal information, so none of AiIdentityConfig is sent to the cloud provider.
+    internal fun identityPrompt(): String = """
+        You are Aura, an AI assistant.
+        Be helpful, clear, and respectful.
+        Protect the user's privacy and do not claim access to personal context.
         When proposing actions, clearly present them for the user to approve before execution.
     """.trimIndent()
 }
