@@ -40,14 +40,15 @@ class OpenAiProviderTest {
     }
 
     @Test
-    fun identityPromptCarriesAuraIdentityWithoutPersonalData() {
+    fun identityPromptIsStaticAndDoesNotIncludeUserEditableIdentityFields() {
         val provider = OpenAiProvider("https://aura.example.com")
-        val prompt = provider.identityPrompt(AiIdentityConfig(name = "Aura Test"))
+        val prompt = provider.identityPrompt()
 
-        assertTrue(prompt.contains("Aura Test"))
-        assertTrue(prompt.contains("Personality:"))
-        assertTrue(prompt.contains("Core values:"))
+        assertTrue(prompt.contains("You are Aura"))
         assertTrue(prompt.contains("approve before execution"))
+        assertFalse(prompt.contains("customDirectives"))
+        assertFalse(prompt.contains("Personality:"))
+        assertFalse(prompt.contains("Core values:"))
     }
 
     @Test(expected = IllegalArgumentException::class)
