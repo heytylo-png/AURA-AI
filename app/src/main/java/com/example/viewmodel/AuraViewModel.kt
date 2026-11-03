@@ -98,6 +98,16 @@ class AuraViewModel @JvmOverloads constructor(
     private val identityPrefs = application.getSharedPreferences("aura_identity_prefs", Context.MODE_PRIVATE)
     private val memoryPrefs = application.getSharedPreferences("aura_memory_prefs", Context.MODE_PRIVATE)
 
+    // Cloud chat is opt-in. Personal memories/projects/settings remain blocked.
+    private val privacyPrefs = application.getSharedPreferences("aura_privacy_prefs", Context.MODE_PRIVATE)
+    private val _cloudChatEnabled = MutableStateFlow(privacyPrefs.getBoolean("cloud_chat_enabled", false))
+    val cloudChatEnabled: StateFlow<Boolean> = _cloudChatEnabled.asStateFlow()
+
+    fun setCloudChatEnabled(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("cloud_chat_enabled", enabled).apply()
+        _cloudChatEnabled.value = enabled
+    }
+
     // Identity configuration loaded from SharedPreferences to survive app restarts
     private val _identity = MutableStateFlow(loadPersistedIdentity())
     val identity: StateFlow<AiIdentityConfig> = _identity.asStateFlow()
@@ -337,7 +347,8 @@ class AuraViewModel @JvmOverloads constructor(
                 activeMemories = memories,
                 projects = projects,
                 currentProject = currentProj,
-                userSettings = userSettings.value
+                userSettings = userSettings.value,
+                allowCloudRequest = cloudChatEnabled.value
             ).collect { state ->
                 when (state) {
                     is HybridAiState.Starting -> {}
