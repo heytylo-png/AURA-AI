@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feature/memory-reliability-v1]
+    branches: [feature/memory-reliability-v1, fix/room-schema-export-no-destructive-migration]  # TEMP branch entry, removed before merge
   workflow_dispatch:
 
 permissions:
@@ -42,6 +42,17 @@ jobs:
       # Room regenerates app/schemas/ during the build. If the generated schema differs from
       # the committed one (or is not committed), the database changed without its schema
       # being recorded, so a migration may be missing. Fail instead of letting that merge.
+      # TEMPORARY (removed before merge): publishes the generated schema as annotations so it
+      # can be copied into the branch from a phone or a session without artifact access.
+      - name: TEMP publish generated Room schema
+        if: always()
+        run: |
+          for f in $(find app/schemas -name '*.json' | sort); do
+            echo "::notice title=schema-file::$f $(sha256sum "$f" | cut -c1-64) $(wc -c < "$f")"
+            b=$(gzip -9n < "$f" | base64 -w0); i=0
+            while [ -n "$b" ]; do echo "::notice title=schema-part-$i::${b:0:3000}"; b="${b:3000}"; i=$((i+1)); done
+          done
+
       - name: Check Room schema files are committed and current
         run: |
           changes="$(git status --porcelain --untracked-files=all -- app/schemas)"
