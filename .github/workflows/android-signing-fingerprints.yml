@@ -1,0 +1,68 @@
+name: Android signing fingerprints
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - chore/android-signing-fingerprints
+
+permissions:
+  contents: read
+
+jobs:
+  signing-report:
+    name: Generate Android signing report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Create temporary debug signing key
+        run: |
+          keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
+
+      - name: Generate signing report
+        run: gradle --no-daemon :app:signingReport 2>&1 | tee signing-report.txt
+
+      - name: Publish debug SHA-1 to workflow summary
+        shell: bash
+        run: |
+          awk '
+            /Variant: debug/ { in_debug=1; print; next }
+            /Variant:/ { if (in_debug) exit }
+            in_debug { print }
+          ' signing-report.txt | tee debug-signing-summary.txt
+          if ! grep -qi 'SHA1:' debug-signing-summary.txt; then
+            echo "Could not find the debug SHA-1 fingerprint in the signing report." >&2
+            exit 1
+          fi
+          {
+            echo "## Aura Android debug signing fingerprint"
+            echo
+            echo "Copy the SHA-1 value into Firebase Console → Project settings → Your apps → Android app → SHA certificate fingerprints."
+            echo
+            echo "This temporary CI fingerprint is valid only for builds signed with this same certificate."
+            echo
+            echo ' ```text'
+            cat debug-signing-summary.txt
+            echo ' ```'
+          } >> "$GITHUB_STEP_SUMMARY"
