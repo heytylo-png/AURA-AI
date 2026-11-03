@@ -72,7 +72,8 @@ class HybridAiEngine(
         activeMemories: List<MemoryEntity>,
         projects: List<ProjectEntity>,
         currentProject: ProjectEntity? = null,
-        userSettings: UserSettingsEntity? = null
+        userSettings: UserSettingsEntity? = null,
+        allowCloudRequest: Boolean = false
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
@@ -81,6 +82,21 @@ class HybridAiEngine(
             HybridRoutingMode.FORCE_LOCAL -> true
             HybridRoutingMode.FORCE_CLOUD -> !online // Force cloud unless device is strictly offline
             HybridRoutingMode.AUTO_HYBRID -> !online || shouldRouteToLocal(prompt)
+        }
+
+        // Cloud use is explicitly opt-in. Until enabled, even FORCE_CLOUD stays local.
+        if (!routeToLocal && !allowCloudRequest) {
+            val localResult = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
+            emit(
+                HybridAiState.Completed(
+                    fullText = localResult.responseText,
+                    modelUsed = AiModelUsed.LOCAL,
+                    latencyMs = localResult.latencyMs,
+                    reasoningRationale = "Privacy setting: cloud chat is off, so this request stayed on-device. " + localResult.reasoningExplanation,
+                    proposedAction = localResult.proposedAction
+                )
+            )
+            return@flow
         }
 
         if (routeToLocal) {
