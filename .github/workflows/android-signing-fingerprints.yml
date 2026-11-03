@@ -27,21 +27,16 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Generate signing report
-        run: ./gradlew :app:signingReport --no-daemon
+        run: ./gradlew :app:signingReport --no-daemon 2>&1 | tee signing-report.txt
 
       - name: Publish debug SHA-1 to workflow summary
         shell: bash
         run: |
-          REPORT="$(find app/build -type f -iname '*signing*report*' -o -iname 'signingReport*.txt' 2>/dev/null | head -n 1)"
-          if [ -z "$REPORT" ]; then
-            ./gradlew :app:signingReport --no-daemon > signing-report.txt
-            REPORT="signing-report.txt"
-          fi
           awk '
             /Variant: debug/ { in_debug=1; print; next }
             /Variant:/ { if (in_debug) exit }
             in_debug { print }
-          ' "$REPORT" | tee debug-signing-summary.txt
+          ' signing-report.txt | tee debug-signing-summary.txt
           if ! grep -qi 'SHA1:' debug-signing-summary.txt; then
             echo "Could not find the debug SHA-1 fingerprint in the signing report." >&2
             exit 1
@@ -49,9 +44,9 @@ jobs:
           {
             echo "## Aura Android debug signing fingerprint"
             echo
-            echo 'Copy the SHA-1 value below into Firebase Console → Project settings → Your apps → Android app → SHA certificate fingerprints.'
+            echo "Copy the SHA-1 value into Firebase Console → Project settings → Your apps → Android app → SHA certificate fingerprints."
             echo
-            echo 'This is a public certificate fingerprint, not a password or API key.'
+            echo "This is a public certificate fingerprint, not a password or API key."
             echo
             echo ' ```text'
             cat debug-signing-summary.txt
