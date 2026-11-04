@@ -77,7 +77,7 @@ jobs:
 
       - name: Assemble debug APK
         env:
-          AURA_KEYSTORE_PASSWORD: ${{ secrets.AURA_KEYSTORE_PASSWORD }}
+          AURA_KEYSTORE_PASSWORD: ${{ github.event_name == 'pull_request' && 'android' || secrets.AURA_KEYSTORE_PASSWORD }}
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Upload Aura debug APK
