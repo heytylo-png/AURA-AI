@@ -59,6 +59,15 @@ jobs:
       - name: Assemble debug APK
         run: gradle --no-daemon :app:assembleDebug
 
+      # Publish the APK as a downloadable GitHub Actions artifact for phone-only users.
+      - name: Upload Aura debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@v4
