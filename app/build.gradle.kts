@@ -36,7 +36,7 @@ android {
       storeFile = file("${rootDir}/debug.keystore")
       // CI supplies the persistent key password for trusted main builds. Local/PR debug builds
       // continue using Android's standard temporary debug-key password.
-      val auraKeyPassword = System.getenv("AURA_KEYSTORE_PASSWORD") ?: "android"
+      val auraKeyPassword = System.getenv("AURA_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() } ?: "android"
       storePassword = auraKeyPassword
       keyAlias = "androiddebugkey"
       keyPassword = auraKeyPassword
