@@ -50,12 +50,10 @@ jobs:
           fi
           echo "Room schema files are committed and match the build."
 
-      # PR builds use an ephemeral key and never publish an installable APK.
       - name: Create temporary PR debug signing key
         if: github.event_name == 'pull_request'
         run: keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Aura PR Debug,O=Aura,C=US'
 
-      # Trusted main/manual builds require the same persistent signing key every time.
       - name: Restore stable signing key
         if: github.event_name != 'pull_request'
         env:
@@ -67,15 +65,13 @@ jobs:
           printf '%s' "$AURA_KEYSTORE_BASE64" | base64 --decode > debug.keystore
           keytool -list -keystore debug.keystore -storepass "$AURA_KEYSTORE_PASSWORD" -alias androiddebugkey >/dev/null
 
-      # Firebase config is required for trusted installable builds. It is supplied as a
-      # repository secret, never committed to the public repository.
       - name: Restore Firebase configuration
         if: github.event_name != 'pull_request'
         env:
-          AURA_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.AURA_GOOGLE_SERVICES_JSON_BASE64 }}
+          AURA_GOOGLE_SERVICES_JSON: ${{ secrets.AURA_GOOGLE_SERVICES_JSON }}
         run: |
-          test -n "$AURA_GOOGLE_SERVICES_JSON_BASE64" || { echo "::error::Missing AURA_GOOGLE_SERVICES_JSON_BASE64 repository secret"; exit 1; }
-          printf '%s' "$AURA_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
+          test -n "$AURA_GOOGLE_SERVICES_JSON" || { echo "::error::Missing AURA_GOOGLE_SERVICES_JSON repository secret"; exit 1; }
+          printf '%s' "$AURA_GOOGLE_SERVICES_JSON" > app/google-services.json
           test -s app/google-services.json
           grep -q '"package_name"[[:space:]]*:[[:space:]]*"com.aistudio.auraai.qvxmk"' app/google-services.json || { echo "::error::Firebase config package name does not match Aura applicationId"; exit 1; }
 
