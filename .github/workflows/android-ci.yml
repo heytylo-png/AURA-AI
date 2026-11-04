@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feature/memory-reliability-v1]
+    branches: [main, feature/memory-reliability-v1]
   workflow_dispatch:
 
 permissions:
@@ -39,9 +39,6 @@ jobs:
       - name: Run unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
 
-      # Room regenerates app/schemas/ during the build. If the generated schema differs from
-      # the committed one (or is not committed), the database changed without its schema
-      # being recorded, so a migration may be missing. Fail instead of letting that merge.
       - name: Check Room schema files are committed and current
         run: |
           changes="$(git status --porcelain --untracked-files=all -- app/schemas)"
@@ -53,11 +50,46 @@ jobs:
           fi
           echo "Room schema files are committed and match the build."
 
-      - name: Create temporary debug signing key
-        run: keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
+      # PR builds use an ephemeral key and never publish an installable APK.
+      - name: Create temporary PR debug signing key
+        if: github.event_name == 'pull_request'
+        run: keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Aura PR Debug,O=Aura,C=US'
+
+      # Trusted main/manual builds require the same persistent signing key every time.
+      - name: Restore stable signing key
+        if: github.event_name != 'pull_request'
+        env:
+          AURA_KEYSTORE_BASE64: ${{ secrets.AURA_KEYSTORE_BASE64 }}
+          AURA_KEYSTORE_PASSWORD: ${{ secrets.AURA_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$AURA_KEYSTORE_BASE64" || { echo "::error::Missing AURA_KEYSTORE_BASE64 repository secret"; exit 1; }
+          test -n "$AURA_KEYSTORE_PASSWORD" || { echo "::error::Missing AURA_KEYSTORE_PASSWORD repository secret"; exit 1; }
+          printf '%s' "$AURA_KEYSTORE_BASE64" | base64 --decode > debug.keystore
+          keytool -list -keystore debug.keystore -storepass "$AURA_KEYSTORE_PASSWORD" -alias androiddebugkey >/dev/null
+
+      # Firebase config is required for trusted installable builds. It is supplied as a
+      # repository secret, never committed to the public repository.
+      - name: Restore Firebase configuration
+        if: github.event_name != 'pull_request'
+        env:
+          AURA_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.AURA_GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          test -n "$AURA_GOOGLE_SERVICES_JSON_BASE64" || { echo "::error::Missing AURA_GOOGLE_SERVICES_JSON_BASE64 repository secret"; exit 1; }
+          printf '%s' "$AURA_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
+          test -s app/google-services.json
+          grep -q '"package_name"[[:space:]]*:[[:space:]]*"com.aistudio.auraai.qvxmk"' app/google-services.json || { echo "::error::Firebase config package name does not match Aura applicationId"; exit 1; }
 
       - name: Assemble debug APK
         run: gradle --no-daemon :app:assembleDebug
+
+      - name: Upload Aura debug APK
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload unit test reports
         if: always()
