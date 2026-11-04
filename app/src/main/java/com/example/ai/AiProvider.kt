@@ -50,6 +50,8 @@ interface AiProvider {
  * filtering policy is implemented centrally.
  */
 internal fun AiProviderRequest.withoutPersonalContext(): AiProviderRequest = copy(
+    // Use the app-owned default identity so custom name/directives/core values do not leak.
+    identity = AiIdentityConfig(),
     activeMemories = emptyList(),
     currentProject = null,
     userSettings = null,

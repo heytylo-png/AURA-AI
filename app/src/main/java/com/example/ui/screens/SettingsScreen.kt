@@ -300,6 +300,37 @@ fun SettingsScreen(
                 }
             }
 
+            // Cloud processing is a separate opt-in. Personal context remains excluded.
+            val cloudChatEnabled by viewModel.cloudChatEnabled.collectAsState()
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Cloud AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "When enabled, the message you send in a chat may be sent to Google Gemini for a response. Keep this off to use on-device responses only. Aura does not send your saved memories, projects, or profile settings to cloud AI.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(if (cloudChatEnabled) "Cloud chat enabled" else "Cloud chat off", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        androidx.compose.material3.Switch(
+                            checked = cloudChatEnabled,
+                            onCheckedChange = viewModel::setCloudChatEnabled,
+                            modifier = Modifier.testTag("cloud_chat_consent_switch")
+                        )
+                    }
+                }
+            }
+
             // Save Confirmation Banner
             AnimatedVisibility(
                 visible = showSavedBanner,

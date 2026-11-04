@@ -105,7 +105,8 @@ class AiProviderContractTest {
             activeMemories = listOf(MemoryEntity(content = "private preference", category = MemoryCategory.PREFERENCE)),
             projects = listOf(project),
             currentProject = project,
-            userSettings = UserSettingsEntity(userName = "Private name", primaryInterest = "Private interest")
+            userSettings = UserSettingsEntity(userName = "Private name", primaryInterest = "Private interest"),
+            allowCloudRequest = true
         ).toList()
 
         val received = requireNotNull(provider.receivedRequest)
@@ -132,7 +133,8 @@ class AiProviderContractTest {
                 mode = HybridRoutingMode.FORCE_CLOUD,
                 identity = com.example.data.model.AiIdentityConfig(),
                 activeMemories = emptyList(),
-                projects = emptyList()
+                projects = emptyList(),
+                allowCloudRequest = true
             ).collect { emittedStates.add(it) }
         } catch (expected: CancellationException) {
             cancellationPropagated = true
