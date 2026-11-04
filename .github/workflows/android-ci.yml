@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feature/memory-reliability-v1]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -53,11 +53,44 @@ jobs:
           fi
           echo "Room schema files are committed and match the build."
 
-      - name: Create temporary debug signing key
-        run: keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
+      - name: Create temporary PR debug signing key
+        if: github.event_name == 'pull_request'
+        run: keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Aura PR Debug,O=Aura,C=US'
+
+      - name: Restore stable signing key
+        if: github.event_name != 'pull_request'
+        env:
+          AURA_KEYSTORE_BASE64: ${{ secrets.AURA_KEYSTORE_BASE64 }}
+          AURA_KEYSTORE_PASSWORD: ${{ secrets.AURA_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$AURA_KEYSTORE_BASE64" || { echo "::error::Missing AURA_KEYSTORE_BASE64 repository secret"; exit 1; }
+          test -n "$AURA_KEYSTORE_PASSWORD" || { echo "::error::Missing AURA_KEYSTORE_PASSWORD repository secret"; exit 1; }
+          printf '%s' "$AURA_KEYSTORE_BASE64" | base64 --decode > debug.keystore
+          keytool -list -keystore debug.keystore -storepass "$AURA_KEYSTORE_PASSWORD" -alias androiddebugkey >/dev/null
+
+      - name: Restore Firebase configuration
+        if: github.event_name != 'pull_request'
+        env:
+          AURA_GOOGLE_SERVICES_JSON: ${{ secrets.AURA_GOOGLE_SERVICES_JSON }}
+        run: |
+          test -n "$AURA_GOOGLE_SERVICES_JSON" || { echo "::error::Missing AURA_GOOGLE_SERVICES_JSON repository secret"; exit 1; }
+          printf '%s' "$AURA_GOOGLE_SERVICES_JSON" > app/google-services.json
+          test -s app/google-services.json
+          grep -q '"package_name"[[:space:]]*:[[:space:]]*"com.aistudio.auraai.qvxmk"' app/google-services.json || { echo "::error::Firebase config package name does not match Aura applicationId"; exit 1; }
 
       - name: Assemble debug APK
+        env:
+          AURA_KEYSTORE_PASSWORD: ${{ github.event_name == 'pull_request' && 'android' || secrets.AURA_KEYSTORE_PASSWORD }}
         run: gradle --no-daemon :app:assembleDebug
+
+      - name: Upload Aura debug APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aura-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload unit test reports
         if: always()
