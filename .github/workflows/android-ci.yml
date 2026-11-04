@@ -76,6 +76,8 @@ jobs:
           grep -q '"package_name"[[:space:]]*:[[:space:]]*"com.aistudio.auraai.qvxmk"' app/google-services.json || { echo "::error::Firebase config package name does not match Aura applicationId"; exit 1; }
 
       - name: Assemble debug APK
+        env:
+          AURA_KEYSTORE_PASSWORD: ${{ secrets.AURA_KEYSTORE_PASSWORD }}
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Upload Aura debug APK
