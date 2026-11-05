@@ -171,7 +171,7 @@ fun SettingsScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "Your User Name and Primary Interest are stored locally on device and automatically injected into the system prompt for ${identity.name} (both Cloud Gemini and Edge Offline reasoning).",
+                            text = "Your User Name and Primary Interest are stored locally on device and automatically injected into the system prompt for ${identity.name} (on-device replies, and Claude when you allow personal context).",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 18.sp
@@ -311,7 +311,7 @@ fun SettingsScreen(
                     Text("Cloud AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "When enabled, the message you send in a chat may be sent to Google Gemini for a response. Keep this off to use on-device responses only. Aura does not send your saved memories, projects, or profile settings to cloud AI.",
+                        text = "When enabled, the message you send in a chat is sent to Anthropic's Claude through your private Aura relay. Keep this off to use on-device replies only. Aura does not send your saved memories, projects, or profile settings to cloud AI.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -327,6 +327,46 @@ fun SettingsScreen(
                             onCheckedChange = viewModel::setCloudChatEnabled,
                             modifier = Modifier.testTag("cloud_chat_consent_switch")
                         )
+                    }
+
+                    // Claude relay access ID: the owner adds it to the relay's allowlist once.
+                    val relayAccessId by viewModel.relayAccessId.collectAsState()
+                    val relayAccessStatus by viewModel.relayAccessStatus.collectAsState()
+                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = if (viewModel.relayConfigured) "Claude relay: set up in this build" else "Claude relay: not set up in this build (no relay address)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    val accessId = relayAccessId
+                    if (accessId == null) {
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = viewModel::requestRelayAccessId,
+                            modifier = Modifier.testTag("relay_get_access_id")
+                        ) { Text("Get access ID") }
+                    } else {
+                        Text("Your access ID", style = MaterialTheme.typography.labelMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = accessId,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f).testTag("relay_access_id")
+                            )
+                            androidx.compose.material3.TextButton(
+                                onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(accessId)) }
+                            ) { Text("Copy") }
+                        }
+                        Text(
+                            text = "Add it to the AURA_ALLOWED_UIDS secret on GitHub so the relay accepts this phone.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    relayAccessStatus?.let {
+                        Spacer(Modifier.height(4.dp))
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }

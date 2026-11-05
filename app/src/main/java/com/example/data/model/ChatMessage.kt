@@ -10,7 +10,7 @@ enum class Sender {
 
 enum class AiModelUsed(val label: String, val badgeIcon: String) {
     LOCAL("Local Offline Model", "bolt"),
-    CLOUD("Gemini 3.8 Flash (Cloud)", "cloud")
+    CLOUD("Claude (Cloud)", "cloud") // stored by name; label only
 }
 
 @Entity(tableName = "chat_messages")
