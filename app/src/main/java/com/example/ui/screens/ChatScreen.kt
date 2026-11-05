@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -75,6 +74,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -100,6 +100,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(viewModel: AuraViewModel) {
     val context = LocalContext.current
+    val isKeyboardVisible = androidx.compose.foundation.layout.WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val coroutineScope = rememberCoroutineScope()
     val identity by viewModel.identity.collectAsState()
     val messages by viewModel.chatMessages.collectAsState()
@@ -261,7 +262,6 @@ fun ChatScreen(viewModel: AuraViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
-                .imePadding()
         ) {
             // Top Header
             ChatTopHeader(
@@ -371,16 +371,18 @@ fun ChatScreen(viewModel: AuraViewModel) {
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 8.dp,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().imePadding()
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Interactive Voice Orb (Tap to speak / stop)
-                VoiceOrb(
+                // Keep voice controls available when the keyboard is closed; collapse them while typing.
+                AnimatedVisibility(visible = !isKeyboardVisible || voiceState != VoiceState.IDLE) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        VoiceOrb(
                     voiceState = voiceState,
-                    size = 58.dp,
+                    size = 40.dp,
                     onClick = {
                         when (voiceState) {
                             VoiceState.IDLE -> {
@@ -404,20 +406,21 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     }
                 )
 
-                Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = when (voiceState) {
+                                VoiceState.IDLE -> "Tap to speak"
+                                VoiceState.LISTENING -> "Listening…"
+                                VoiceState.PROCESSING -> "Processing…"
+                                VoiceState.SPEAKING -> "Speaking • Tap to stop"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
 
-                Text(
-                    text = when (voiceState) {
-                        VoiceState.IDLE -> "Tap orb or mic to speak with ${identity.name}"
-                        VoiceState.LISTENING -> "Listening... Speak clearly"
-                        VoiceState.PROCESSING -> "Processing speech..."
-                        VoiceState.SPEAKING -> "Speaking • Tap orb to mute"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
 
                 // Input row
                 Row(
@@ -432,6 +435,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
                             .weight(1f)
                             .testTag("chat_input_field"),
                         shape = RoundedCornerShape(24.dp),
+                        minLines = 1,
                         maxLines = 4,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
