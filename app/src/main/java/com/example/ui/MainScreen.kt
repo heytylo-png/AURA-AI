@@ -3,7 +3,9 @@ package com.example.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -147,6 +149,11 @@ fun MainScreen(viewModel: AuraViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                // contentWindowInsets = safeDrawing already includes the keyboard, so innerPadding
+                // can contain the IME height. Mark it consumed so imePadding() adds only what is left;
+                // without this the keyboard height is applied twice.
+                .consumeWindowInsets(innerPadding)
+                .then(if (selectedTab == 1) Modifier.imePadding() else Modifier)
         ) {
             when (selectedTab) {
                 0 -> DashboardScreen(
