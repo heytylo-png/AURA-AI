@@ -10,10 +10,12 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatSessionDao {
-    @Query("SELECT * FROM chat_sessions ORDER BY lastModifiedAt DESC LIMIT :limit")
+    // Use the auto-incremented ID as a deterministic tie-breaker when sessions
+    // are created within the same millisecond.
+    @Query("SELECT * FROM chat_sessions ORDER BY lastModifiedAt DESC, id DESC LIMIT :limit")
     fun getLastSessions(limit: Int = 5): Flow<List<ChatSessionEntity>>
 
-    @Query("SELECT * FROM chat_sessions ORDER BY lastModifiedAt DESC")
+    @Query("SELECT * FROM chat_sessions ORDER BY lastModifiedAt DESC, id DESC")
     fun getAllSessions(): Flow<List<ChatSessionEntity>>
 
     @Query("SELECT * FROM chat_sessions WHERE id = :sessionId LIMIT 1")
