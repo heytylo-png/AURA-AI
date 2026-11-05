@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import com.example.ui.screens.ChatScreen
 import com.example.ui.screens.DashboardScreen
@@ -42,6 +43,7 @@ fun MainScreen(viewModel: AuraViewModel) {
     val pendingApprovals by viewModel.pendingApprovalCount.collectAsState()
     val allMemories by viewModel.allMemories.collectAsState()
     val showSettings by viewModel.showSettings.collectAsState()
+    val isKeyboardVisible = androidx.compose.foundation.layout.WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
     // BackHandler: If settings is open, close it; otherwise if on secondary tab, back returns to Dashboard
     BackHandler(enabled = showSettings || selectedTab != 0) {
@@ -63,7 +65,7 @@ fun MainScreen(viewModel: AuraViewModel) {
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
-            NavigationBar(
+            if (!isKeyboardVisible) NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surface,
                 modifier = Modifier
                     .navigationBarsPadding()
