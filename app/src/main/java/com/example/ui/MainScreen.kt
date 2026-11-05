@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -147,6 +148,8 @@ fun MainScreen(viewModel: AuraViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                // Apply IME insets once, at the Scaffold content boundary for chat only.
+                .then(if (selectedTab == 1) Modifier.imePadding() else Modifier)
         ) {
             when (selectedTab) {
                 0 -> DashboardScreen(
