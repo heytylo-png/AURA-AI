@@ -263,6 +263,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .imePadding()
                 .background(MaterialTheme.colorScheme.background)
         ) {
             // Top Header
@@ -373,56 +374,13 @@ fun ChatScreen(viewModel: AuraViewModel) {
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 8.dp,
-            modifier = Modifier.fillMaxWidth().imePadding()
+            modifier = Modifier.fillMaxWidth()
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Keep voice controls available when the keyboard is closed; collapse them while typing.
-                AnimatedVisibility(visible = !isKeyboardVisible || voiceState != VoiceState.IDLE) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        VoiceOrb(
-                    voiceState = voiceState,
-                    size = 40.dp,
-                    onClick = {
-                        when (voiceState) {
-                            VoiceState.IDLE -> {
-                                val hasPermission = ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.RECORD_AUDIO
-                                ) == PackageManager.PERMISSION_GRANTED
-                                if (hasPermission) {
-                                    viewModel.voiceManager.startListening { spoken ->
-                                        inputText = spoken
-                                        viewModel.sendMessage(spoken)
-                                    }
-                                } else {
-                                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
-                            }
-                            VoiceState.LISTENING -> viewModel.voiceManager.stopListening()
-                            VoiceState.SPEAKING -> viewModel.voiceManager.stopSpeaking()
-                            VoiceState.PROCESSING -> {}
-                        }
-                    }
-                )
-
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            text = when (voiceState) {
-                                VoiceState.IDLE -> "Tap to speak"
-                                VoiceState.LISTENING -> "Listening…"
-                                VoiceState.PROCESSING -> "Processing…"
-                                VoiceState.SPEAKING -> "Speaking • Tap to stop"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(6.dp))
+                // Compact composer: voice input stays on the trailing side of the text field.
 
                 // Input row
                 Row(
@@ -475,16 +433,23 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     } else {
                         IconButton(
                             onClick = {
-                                val hasPermission = ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.RECORD_AUDIO
-                                ) == PackageManager.PERMISSION_GRANTED
-                                if (hasPermission) {
-                                    viewModel.voiceManager.startListening { spoken ->
-                                        viewModel.sendMessage(spoken)
+                                when (voiceState) {
+                                    VoiceState.IDLE -> {
+                                        val hasPermission = ContextCompat.checkSelfPermission(
+                                            context,
+                                            Manifest.permission.RECORD_AUDIO
+                                        ) == PackageManager.PERMISSION_GRANTED
+                                        if (hasPermission) {
+                                            viewModel.voiceManager.startListening { spoken ->
+                                                inputText = spoken
+                                            }
+                                        } else {
+                                            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                        }
                                     }
-                                } else {
-                                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    VoiceState.LISTENING -> viewModel.voiceManager.stopListening()
+                                    VoiceState.SPEAKING -> viewModel.voiceManager.stopSpeaking()
+                                    VoiceState.PROCESSING -> Unit
                                 }
                             },
                             modifier = Modifier
