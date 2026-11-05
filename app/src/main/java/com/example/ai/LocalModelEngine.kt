@@ -8,6 +8,7 @@ import com.example.data.model.PersonalityArchetype
 import com.example.data.model.ProjectEntity
 import com.example.data.model.TaskActionEntity
 import com.example.data.model.UserSettingsEntity
+import org.json.JSONObject
 import java.util.Locale
 
 data class LocalAiResult(
@@ -44,7 +45,11 @@ class LocalModelEngine {
                 description = extractedMemory,
                 actionType = ActionType.SAVE_MEMORY,
                 reasoning = "Aura detected a personal preference or key fact to remember permanently across sessions.",
-                payloadJson = "{\"content\":\"$extractedMemory\",\"category\":\"${category.name}\",\"importance\":4}"
+                payloadJson = JSONObject()
+                    .put("content", extractedMemory)
+                    .put("category", category.name)
+                    .put("importance", 4)
+                    .toString()
             )
             val text = formatMemoryAckResponse(identity, extractedMemory, category)
             val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(14)
@@ -64,7 +69,11 @@ class LocalModelEngine {
                 description = "Initialize new project repository: $projectName",
                 actionType = ActionType.CREATE_PROJECT,
                 reasoning = "Aura identified intent to organize work under a dedicated project library entry.",
-                payloadJson = "{\"title\":\"$projectName\",\"description\":\"Created via Aura task execution\",\"category\":\"Tech\"}"
+                payloadJson = JSONObject()
+                    .put("title", projectName)
+                    .put("description", "Created via Aura task execution")
+                    .put("category", "Tech")
+                    .toString()
             )
             val text = formatProjectAckResponse(identity, projectName)
             val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(16)
@@ -85,7 +94,10 @@ class LocalModelEngine {
                 actionType = ActionType.CREATE_TODO,
                 reasoning = "Aura parsed an actionable to-do item requiring human approval before adding to schedule.",
                 associatedProjectId = currentProject?.id,
-                payloadJson = "{\"title\":\"$taskDesc\",\"projectId\":${currentProject?.id ?: "null"}}"
+                payloadJson = JSONObject()
+                    .put("title", taskDesc)
+                    .put("projectId", currentProject?.id ?: JSONObject.NULL)
+                    .toString()
             )
             val text = formatTaskAckResponse(identity, taskDesc, currentProject)
             val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(15)

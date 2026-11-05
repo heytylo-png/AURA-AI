@@ -35,6 +35,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.actions.ActionExecutor
 import com.example.data.model.ActionStatus
 import com.example.data.model.TaskActionEntity
 
@@ -47,10 +48,14 @@ fun ActionProposalCard(
 ) {
     val isPending = action.status == ActionStatus.PROPOSED
     val isExecuted = action.status == ActionStatus.APPROVED_EXECUTED
+    // Approve is offered only for action types that can actually run.
+    val canExecute = ActionExecutor.isSupported(action.actionType)
 
     val cardBorder = when (action.status) {
         ActionStatus.PROPOSED -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+        ActionStatus.EXECUTING -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
         ActionStatus.APPROVED_EXECUTED -> BorderStroke(1.dp, Color(0xFF00E676).copy(alpha = 0.4f))
+        ActionStatus.FAILED -> BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
         ActionStatus.DISMISSED -> BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
     }
 
@@ -95,12 +100,26 @@ fun ActionProposalCard(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            text = "Executed by AI",
+                            text = "Completed",
                             color = Color(0xFF00E676),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium
                         )
                     }
+                } else if (action.status == ActionStatus.FAILED) {
+                    Text(
+                        text = "Failed \u2014 nothing was changed",
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.testTag("action_failed_label_${action.id}")
+                    )
+                } else if (action.status == ActionStatus.EXECUTING) {
+                    Text(
+                        text = "Running\u2026",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 11.sp
+                    )
                 } else if (!isPending) {
                     Text(
                         text = "Dismissed",
@@ -174,7 +193,16 @@ fun ActionProposalCard(
 
                     Spacer(Modifier.width(8.dp))
 
-                    Button(
+                    if (!canExecute) {
+                        Text(
+                            text = "Not available yet",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .align(Alignment.CenterVertically)
+                                .testTag("action_unavailable_${action.id}")
+                        )
+                    } else Button(
                         onClick = { onApprove(action) },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary

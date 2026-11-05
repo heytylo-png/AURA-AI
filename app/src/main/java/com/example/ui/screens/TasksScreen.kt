@@ -124,9 +124,16 @@ fun TasksScreen(viewModel: AuraViewModel) {
                     }
                     item {
                         FilterChip(
-                            label = "Executed (${allActions.count { it.status == ActionStatus.APPROVED_EXECUTED }})",
+                            label = "Completed (${allActions.count { it.status == ActionStatus.APPROVED_EXECUTED }})",
                             isSelected = statusFilter == ActionStatus.APPROVED_EXECUTED,
                             onClick = { statusFilter = ActionStatus.APPROVED_EXECUTED }
+                        )
+                    }
+                    item {
+                        FilterChip(
+                            label = "Failed (${allActions.count { it.status == ActionStatus.FAILED }})",
+                            isSelected = statusFilter == ActionStatus.FAILED,
+                            onClick = { statusFilter = ActionStatus.FAILED }
                         )
                     }
                     item {
