@@ -12,9 +12,12 @@ enum class ActionType(val title: String) {
     UPDATE_PREFERENCE("Update Preference")
 }
 
+// Stored by name (TEXT column), so adding values needs no schema migration.
 enum class ActionStatus {
     PROPOSED, // Waiting for user approval
-    APPROVED_EXECUTED, // User approved and AI carried it out
+    EXECUTING, // Approved; the operation is running
+    APPROVED_EXECUTED, // Approved and the operation completed successfully
+    FAILED, // Approved but the operation did not complete; nothing it would have written was kept
     DISMISSED // User rejected
 }
 

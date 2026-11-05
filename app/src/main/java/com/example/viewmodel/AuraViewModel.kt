@@ -7,7 +7,7 @@ import com.example.ai.HybridAiEngine
 import com.example.ai.HybridAiState
 import com.example.ai.HybridRoutingMode
 import com.example.data.local.AppDatabase
-import com.example.data.model.ActionStatus
+import com.example.actions.ActionExecutor
 import com.example.data.model.ActionType
 import com.example.data.model.AiIdentityConfig
 import com.example.data.model.AiModelUsed
@@ -44,7 +44,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 
 class AuraViewModel @JvmOverloads constructor(
     application: Application,
@@ -62,6 +61,7 @@ class AuraViewModel @JvmOverloads constructor(
 
     private val db = AppDatabase.getInstance(application)
     private val taskActionDao = db.taskActionDao()
+    private val actionExecutor = ActionExecutor(db)
     private val userSettingsDao = db.userSettingsDao()
 
     val userSettings: StateFlow<UserSettingsEntity> = userSettingsDao.getUserSettings()
@@ -234,6 +234,8 @@ class AuraViewModel @JvmOverloads constructor(
     init {
         loadChatMessages()
         seedInitialDataIfNeeded()
+        // An action left EXECUTING means the app was killed mid-run; its writes were rolled back.
+        viewModelScope.launch { actionExecutor.recoverInterrupted() }
     }
 
     fun setSelectedTab(tabIndex: Int) {
@@ -408,84 +410,15 @@ class AuraViewModel @JvmOverloads constructor(
 
     fun approveAction(action: TaskActionEntity) {
         viewModelScope.launch {
-            try {
-                // Execute based on ActionType
-                when (action.actionType) {
-                    ActionType.SAVE_MEMORY -> {
-                        val json = JSONObject(action.payloadJson)
-                        val content = json.optString("content", action.description)
-                        val catStr = json.optString("category", "PREFERENCE")
-                        val cat = try { MemoryCategory.valueOf(catStr) } catch (e: Exception) { MemoryCategory.PREFERENCE }
-                        val importance = json.optInt("importance", 3)
-                        memoryRepository.insertMemory(
-                            MemoryEntity(
-                                content = content,
-                                category = cat,
-                                importance = importance,
-                                isActive = true
-                            )
-                        )
-                    }
-                    ActionType.CREATE_PROJECT -> {
-                        val json = JSONObject(action.payloadJson)
-                        val title = json.optString("title", action.title)
-                        val desc = json.optString("description", action.description)
-                        val cat = json.optString("category", "General")
-                        val projId = projectRepository.insertProject(
-                            ProjectEntity(
-                                title = title,
-                                description = desc,
-                                category = cat,
-                                status = ProjectStatus.PLANNING
-                            )
-                        )
-                        // Add default milestone
-                        projectRepository.insertMilestone(
-                            MilestoneEntity(
-                                projectId = projId,
-                                title = "Kickoff & Requirements Discovery",
-                                isCompleted = false
-                            )
-                        )
-                    }
-                    ActionType.ADD_MILESTONE -> {
-                        val json = JSONObject(action.payloadJson)
-                        val projId = json.optLong("projectId", action.associatedProjectId ?: 1)
-                        val title = json.optString("title", action.description)
-                        projectRepository.insertMilestone(
-                            MilestoneEntity(
-                                projectId = projId,
-                                title = title,
-                                isCompleted = false
-                            )
-                        )
-                    }
-                    ActionType.CREATE_TODO -> {
-                        // Marked as executed, payload verified
-                    }
-                    else -> {}
-                }
-
-                // Update Action Status in DB
-                taskActionDao.updateActionStatus(
-                    id = action.id,
-                    status = ActionStatus.APPROVED_EXECUTED,
-                    executedAt = System.currentTimeMillis()
-                )
-            } catch (e: Exception) {
-                // Fallback mark as executed
-                taskActionDao.updateActionStatus(
-                    id = action.id,
-                    status = ActionStatus.APPROVED_EXECUTED,
-                    executedAt = System.currentTimeMillis()
-                )
-            }
+            // The executor records APPROVED_EXECUTED only when the operation succeeds, FAILED otherwise,
+            // and refuses to run an action that is no longer PROPOSED (double tap, second screen).
+            actionExecutor.execute(action.id)
         }
     }
 
     fun dismissAction(action: TaskActionEntity) {
         viewModelScope.launch {
-            taskActionDao.updateActionStatus(action.id, ActionStatus.DISMISSED)
+            taskActionDao.dismissIfProposed(action.id)
         }
     }
 

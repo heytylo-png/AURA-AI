@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Mic
@@ -1015,7 +1016,7 @@ private fun TaskStatusSummaryCard(
                     color = if (pendingCount > 0) Color(0xFFFFB74D) else MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 StatusPill(
-                    label = "Executed by AI",
+                    label = "Completed",
                     count = executedCount,
                     color = Color(0xFF00E676)
                 )
@@ -1053,11 +1054,15 @@ private fun TaskStatusSummaryCard(
                                 val statusIcon = when (action.status) {
                                     ActionStatus.APPROVED_EXECUTED -> Icons.Default.CheckCircle
                                     ActionStatus.PROPOSED -> Icons.Default.HourglassEmpty
+                                    ActionStatus.EXECUTING -> Icons.Default.HourglassEmpty
+                                    ActionStatus.FAILED -> Icons.Default.ErrorOutline
                                     ActionStatus.DISMISSED -> Icons.Default.AssignmentTurnedIn
                                 }
                                 val statusColor = when (action.status) {
                                     ActionStatus.APPROVED_EXECUTED -> Color(0xFF00E676)
                                     ActionStatus.PROPOSED -> Color(0xFFFFB74D)
+                                    ActionStatus.EXECUTING -> MaterialTheme.colorScheme.primary
+                                    ActionStatus.FAILED -> MaterialTheme.colorScheme.error
                                     ActionStatus.DISMISSED -> MaterialTheme.colorScheme.outline
                                 }
 
