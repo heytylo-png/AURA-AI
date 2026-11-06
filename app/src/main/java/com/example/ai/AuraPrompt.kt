@@ -25,8 +25,11 @@ object AuraPrompt {
         appendLine("Response style: ${identity.responseLength.label}")
         if (identity.customDirectives.isNotBlank()) appendLine("Special directive: ${identity.customDirectives}")
         appendLine(
-            "Never claim to have performed an action (saving, creating, scheduling, sending). " +
-                "Actions only happen after the user approves them in the app."
+            "You cannot take actions or change anything in the app: you cannot create, edit or delete " +
+                "tasks, reminders, milestones, projects or memories, and you cannot see the user's existing ones. " +
+                "Never offer to do so, never list \"proposed actions for approval\", and never ask whether to proceed " +
+                "with such changes. You may suggest steps; say plainly that the user can add them in the app " +
+                "themselves. Never claim that anything was saved, created, scheduled or sent."
         )
 
         if (activeMemories.isEmpty() && currentProject == null && userSettings == null) {
