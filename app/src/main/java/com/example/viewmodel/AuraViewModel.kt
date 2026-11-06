@@ -574,35 +574,8 @@ class AuraViewModel @JvmOverloads constructor(
                 loadChatMessages()
             }
 
-            // Seed starter memories only once. Count all rows (not just active ones),
-            // and persist the initialization marker so a deliberate clear survives restarts.
-            if (!memoryPrefs.getBoolean("memory_initialized", false)) {
-                val existingMemoryCount = memoryRepository.getMemoriesCount().first()
-                if (existingMemoryCount == 0) {
-                    memoryRepository.insertMemory(
-                        MemoryEntity(
-                            content = "User prefers clear, structured breakdowns with actionable next steps.",
-                            category = MemoryCategory.PREFERENCE,
-                            importance = 5
-                        )
-                    )
-                    memoryRepository.insertMemory(
-                        MemoryEntity(
-                            content = "Focuses on modern Android, Kotlin, and Jetpack Compose architecture.",
-                            category = MemoryCategory.CONTEXT,
-                            importance = 4
-                        )
-                    )
-                    memoryRepository.insertMemory(
-                        MemoryEntity(
-                            content = "Goal: Build a high-autonomy personal AI ecosystem with human approval loops.",
-                            category = MemoryCategory.GOAL,
-                            importance = 5
-                        )
-                    )
-                }
-                memoryPrefs.edit().putBoolean("memory_initialized", true).apply()
-            }
+            // Never invent memories. Aura only stores what the user saves or approves.
+            // Memories created by older versions are left alone; the user can delete them.
 
             // Do not recreate demo projects or milestones when the project list is empty.
         }

@@ -627,6 +627,28 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun `fresh install starts with no memories`() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val db = AppDatabase.createInMemory(app)
+        val chatRepo = DefaultChatRepository(db.chatMessageDao(), db.chatSessionDao())
+        val memoryRepo = com.example.data.repository.DefaultMemoryRepository(db.memoryDao())
+        val projectRepo = com.example.data.repository.DefaultProjectRepository(db.projectDao())
+        // A fresh install has never set the old seeding flag.
+        app.getSharedPreferences("aura_memory_prefs", Context.MODE_PRIVATE).edit().clear().commit()
+
+        val viewModel = com.example.viewmodel.AuraViewModel(
+            application = app,
+            chatRepository = chatRepo,
+            memoryRepository = memoryRepo,
+            projectRepository = projectRepo
+        )
+        withTimeout(5_000) { viewModel.activeSession.first { it != null } }
+
+        assertEquals(0, memoryRepo.getMemoriesCount().first())
+        db.close()
+    }
+
+    @Test
     fun `startup reuses existing conversations without adding demo sessions`() = runBlocking {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val db = AppDatabase.createInMemory(app)

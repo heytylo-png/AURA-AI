@@ -11,6 +11,7 @@ import com.example.data.model.TaskActionEntity
 import com.example.data.model.UserSettingsEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 
 enum class HybridRoutingMode(val label: String, val description: String) {
@@ -55,7 +56,8 @@ class HybridAiEngine(
         val wordCount = prompt.split("\\s+".toRegex()).size
 
         // Direct triggers for local engine
-        if (wordCount <= 4 && (lower.contains("hi") || lower.contains("hello") || lower.contains("hey"))) return true
+        // Whole words only: "hi" must not match "this", "which" or "think".
+        if (wordCount <= 4 && GREETING.containsMatchIn(lower)) return true
         if (lower.startsWith("remember") || lower.contains("my favorite") || lower.contains("i prefer")) return true
         if (lower.startsWith("create project") || lower.startsWith("new project")) return true
         if (lower.startsWith("add task") || lower.startsWith("todo:") || lower.startsWith("task:")) return true
@@ -84,113 +86,145 @@ class HybridAiEngine(
             HybridRoutingMode.AUTO_HYBRID -> !online || shouldRouteToLocal(prompt)
         }
 
-        // Cloud use is explicitly opt-in. Until enabled, even FORCE_CLOUD stays local.
+        // Cloud use is explicitly opt-in.
         if (!routeToLocal && !allowCloudRequest) {
-            val localResult = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
-            emit(
-                HybridAiState.Completed(
-                    fullText = localResult.responseText,
-                    modelUsed = AiModelUsed.LOCAL,
-                    latencyMs = localResult.latencyMs,
-                    reasoningRationale = "Privacy setting: cloud chat is off, so this request stayed on-device. " + localResult.reasoningExplanation,
-                    proposedAction = localResult.proposedAction
+            if (mode == HybridRoutingMode.FORCE_CLOUD) {
+                emit(notice(
+                    "Nothing was sent: cloud chat is off. Turn on \"Cloud chat\" in Settings \u2192 Cloud AI, " +
+                        "or switch to Auto or Local mode.",
+                    "Cloud-only mode with cloud chat turned off."
+                ))
+            } else {
+                val localResult = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
+                emit(
+                    HybridAiState.Completed(
+                        fullText = localResult.responseText,
+                        modelUsed = AiModelUsed.LOCAL,
+                        latencyMs = localResult.latencyMs,
+                        reasoningRationale = "Cloud chat is off, so this was answered on this phone and nothing was sent.",
+                        proposedAction = localResult.proposedAction
+                    )
                 )
-            )
+            }
             return@flow
         }
 
         if (routeToLocal) {
+            if (mode == HybridRoutingMode.FORCE_CLOUD) {
+                emit(notice(
+                    "You're offline, and Cloud-only mode can't answer without a connection. Nothing was sent.",
+                    "Cloud-only mode while offline."
+                ))
+                return@flow
+            }
             val localResult = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
-            val rationale = if (!online) {
-                "Offline Mode: Handled via on-device Local Reasoning Engine."
-            } else {
-                "Auto Router: Fast path executed locally (${localResult.latencyMs}ms)."
+            val rationale = when {
+                mode == HybridRoutingMode.FORCE_LOCAL -> "Local-only mode: answered on this phone; nothing was sent."
+                !online -> "Offline: answered on this phone; nothing was sent."
+                else -> "Auto mode: a simple command, answered on this phone; nothing was sent."
             }
             emit(
                 HybridAiState.Completed(
                     fullText = localResult.responseText,
                     modelUsed = AiModelUsed.LOCAL,
                     latencyMs = localResult.latencyMs,
-                    reasoningRationale = "$rationale ${localResult.reasoningExplanation}",
+                    reasoningRationale = rationale,
                     proposedAction = localResult.proposedAction
                 )
             )
             return@flow
         }
 
-        // Attempt Cloud Model (Gemini 3.8 Flash) with graceful fallback to Local
-        var cloudCompleted = false
-        var lastStreamedText = ""
+        val providerRequest = AiProviderRequest(
+            prompt = prompt,
+            identity = identity,
+            activeMemories = activeMemories,
+            currentProject = currentProject,
+            userSettings = userSettings
+        ).withoutPersonalContext()
 
-        try {
-            val providerRequest = AiProviderRequest(
-                prompt = prompt,
-                identity = identity,
-                activeMemories = activeMemories,
-                currentProject = currentProject,
-                userSettings = userSettings
-            ).withoutPersonalContext()
-
-            cloudEngine.generateStream(providerRequest).collect { chunk ->
-                    when (chunk) {
-                        is AiProviderEvent.Content -> {
-                            lastStreamedText = chunk.text
-                            emit(HybridAiState.Streaming(chunk.text, AiModelUsed.CLOUD))
-                        }
-                        is AiProviderEvent.Completed -> {
-                            cloudCompleted = true
-                            // Check if prompt inspired an action proposal even in cloud
-                            val localScan = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
-                            emit(
-                                HybridAiState.Completed(
-                                    fullText = chunk.fullText,
-                                    modelUsed = AiModelUsed.CLOUD,
-                                    latencyMs = chunk.latencyMs,
-                                    reasoningRationale = "Cloud Reasoning via Gemini 3.8 Flash (High-depth inference)",
-                                    proposedAction = localScan.proposedAction
-                                )
-                            )
-                        }
-                        is AiProviderEvent.Error -> {
-                            if (lastStreamedText.isBlank()) {
-                                val localFallback = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
-                                emit(
-                                    HybridAiState.Completed(
-                                        fullText = localFallback.responseText,
-                                        modelUsed = AiModelUsed.LOCAL,
-                                        latencyMs = localFallback.latencyMs,
-                                        reasoningRationale = "Handled locally via edge reasoning engine.",
-                                        proposedAction = localFallback.proposedAction
-                                    )
-                                )
-                            } else {
-                                emit(
-                                    HybridAiState.Completed(
-                                        fullText = lastStreamedText,
-                                        modelUsed = AiModelUsed.CLOUD,
-                                        latencyMs = 8_000L,
-                                        reasoningRationale = "Cloud stream concluded.",
-                                        proposedAction = null
-                                    )
-                                )
-                            }
-                        }
+        var streamedText = ""
+        var failure: String? = null
+        var completed: AiProviderEvent.Completed? = null
+        // catch{} only sees provider (upstream) failures, never exceptions from our own collector,
+        // which keeps Kotlin's flow exception rules intact (audit FB-07).
+        cloudEngine.generateStream(providerRequest)
+            .catch { e ->
+                // A cancelled chat/request must stop; it must not launch fallback work.
+                if (e is CancellationException) throw e
+                emit(AiProviderEvent.Error(e.message ?: e.javaClass.simpleName))
+            }
+            .collect { event ->
+                when (event) {
+                    is AiProviderEvent.Content -> {
+                        streamedText = event.text
+                        emit(HybridAiState.Streaming(event.text, AiModelUsed.CLOUD))
                     }
+                    is AiProviderEvent.Completed -> completed = event
+                    is AiProviderEvent.Error -> failure = event.message
                 }
-        } catch (e: CancellationException) {
-            // A cancelled chat/request must stop; it must not launch fallback work.
-            throw e
-        } catch (e: Exception) {
-            val localFallback = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
-            emit(
-                HybridAiState.Completed(
-                    fullText = localFallback.responseText,
-                    modelUsed = AiModelUsed.LOCAL,
-                    latencyMs = localFallback.latencyMs,
-                    reasoningRationale = "Handled locally via edge reasoning engine.",
-                    proposedAction = localFallback.proposedAction
+            }
+
+        val done = completed
+        when {
+            done != null -> {
+                // Check if the prompt inspired an action proposal even in cloud
+                val localScan = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
+                emit(
+                    HybridAiState.Completed(
+                        fullText = done.fullText,
+                        modelUsed = AiModelUsed.CLOUD,
+                        latencyMs = done.latencyMs,
+                        reasoningRationale = "Answered by Gemini 3.8 Flash (cloud). Only this message was sent; no memories, projects or profile.",
+                        proposedAction = localScan.proposedAction
+                    )
                 )
-            )
+            }
+            streamedText.isNotBlank() -> {
+                // Keep what arrived, and say plainly that it is incomplete.
+                emit(
+                    HybridAiState.Completed(
+                        fullText = "$streamedText\n\n\u26a0 This answer is incomplete: ${failure ?: "the stream ended early"}",
+                        modelUsed = AiModelUsed.CLOUD,
+                        latencyMs = 0L,
+                        reasoningRationale = "Gemini's reply was cut off: ${failure ?: "the stream ended early"}",
+                        proposedAction = null
+                    )
+                )
+            }
+            mode == HybridRoutingMode.FORCE_CLOUD -> {
+                emit(notice(
+                    "Gemini couldn't answer this message.\n\n${failure ?: "No reply was received."}",
+                    "Cloud request failed: ${failure ?: "no reply"}. Your message was sent to Gemini."
+                ))
+            }
+            else -> {
+                // Auto mode: fall back on this phone, and label it as a fallback.
+                val localFallback = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
+                emit(
+                    HybridAiState.Completed(
+                        fullText = "\u26a0 Gemini is unavailable (${failure ?: "no reply"}). Offline reply:\n\n${localFallback.responseText}",
+                        modelUsed = AiModelUsed.LOCAL,
+                        latencyMs = localFallback.latencyMs,
+                        reasoningRationale = "Cloud request failed (${failure ?: "no reply"}), so Aura answered on this phone. " +
+                            "Your message was sent to Gemini before it failed.",
+                        proposedAction = localFallback.proposedAction
+                    )
+                )
+            }
         }
+    }
+
+    /** A status message from Aura itself, not an AI answer. */
+    private fun notice(text: String, rationale: String) = HybridAiState.Completed(
+        fullText = text,
+        modelUsed = AiModelUsed.LOCAL,
+        latencyMs = 0L,
+        reasoningRationale = rationale,
+        proposedAction = null
+    )
+
+    private companion object {
+        val GREETING = Regex("""\b(hi|hello|hey)\b""")
     }
 }
