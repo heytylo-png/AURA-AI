@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.theme.auraBackground
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -73,7 +74,7 @@ fun ProjectsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .auraBackground()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Header

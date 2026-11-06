@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.theme.auraBackground
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,7 +63,7 @@ fun TasksScreen(viewModel: AuraViewModel) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .auraBackground()
     ) {
         // Header
         Surface(

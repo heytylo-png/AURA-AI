@@ -1,6 +1,6 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,9 +13,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -29,7 +29,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -47,17 +46,16 @@ fun ModelBadge(
 
     val isLocal = modelUsed == AiModelUsed.LOCAL
     val isNone = modelUsed == AiModelUsed.NONE
-    val badgeBg = when { isNone -> Color(0xFF2A2A2E); isLocal -> Color(0xFF0D2818); else -> Color(0xFF1B1A3A) }
-    val badgeBorder = when { isNone -> Color(0xFF9E9E9E); isLocal -> Color(0xFF00E676); else -> Color(0xFF9D4EDD) }
-    val textColor = when { isNone -> Color(0xFFBDBDBD); isLocal -> Color(0xFF69F0AE); else -> Color(0xFFE0AAFF) }
-    val icon = when { isNone -> Icons.Default.Info; isLocal -> Icons.Default.Bolt; else -> Icons.Default.Cloud }
+    // Quiet outlined tag; it says where the reply came from, so it is shown on every AI message.
+    val textColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val icon = when { isNone -> Icons.Default.Info; isLocal -> Icons.Default.PhoneAndroid; else -> Icons.Default.Cloud }
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(badgeBg)
+            .clip(RoundedCornerShape(6.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
             .clickable { if (!reasoningExplanation.isNullOrBlank()) showDialog = true }
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 7.dp, vertical = 3.dp)
             .testTag("model_badge_${modelUsed.name.lowercase()}")
     ) {
         Row(
@@ -68,13 +66,13 @@ fun ModelBadge(
                 imageVector = icon,
                 contentDescription = null,
                 tint = textColor,
-                modifier = Modifier.size(13.dp)
+                modifier = Modifier.size(12.dp)
             )
             Text(
                 text = when { isNone -> "Not answered"; isLocal -> "On this phone"; else -> "Claude" },
                 color = textColor,
                 fontSize = 11.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
             )
             if (latencyMs != null && latencyMs > 0) {
                 Text(

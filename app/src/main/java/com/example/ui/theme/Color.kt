@@ -2,31 +2,21 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Aura Neon & Obsidian Palette
-val CyanPrimary = Color(0xFF00E5FF)
-val CyanPrimaryLight = Color(0xFF0091EA)
-val CyanPrimaryDark = Color(0xFF00B0FF)
+// Aura "graphite" palette: dark gray with a faint grain, crisp white text,
+// and colour reserved for states (amber = warning, soft red = failure).
 
-val VioletSecondary = Color(0xFFA855F7)
-val VioletSecondaryLight = Color(0xFF7E22CE)
+val Graphite = Color(0xFF1E1E1E)          // app background (under the grain)
+val GraphiteRaised = Color(0xFF242424)    // cards, sheets, nav bar
+val GraphiteHigh = Color(0xFF2B2B2B)      // user bubbles, inputs, chips
+val GraphiteHighest = Color(0xFF323232)
+val GraphiteLine = Color(0xFF383838)      // hairlines and outlines
+val GraphiteLineSoft = Color(0xFF2E2E2E)
 
-val CoralTertiary = Color(0xFFFF9F43)
-val EmeraldAccent = Color(0xFF00E676)
+val TextPrimary = Color(0xFFFFFFFF)       // headings, bold, controls
+val TextBody = Color(0xFFE4E4E2)          // long reply text (softer than pure white)
+val TextMuted = Color(0xFFA6A6A6)         // labels, timestamps (7:1 on Graphite)
 
-// Dark Theme (Default AI Obsidian Look)
-val DarkBackground = Color(0xFF0B0E14)
-val DarkSurface = Color(0xFF131823)
-val DarkSurfaceVariant = Color(0xFF1E2536)
-val DarkSurfaceContainer = Color(0xFF181F2E)
-val DarkOutline = Color(0xFF2B354B)
-
-val DarkOnBackground = Color(0xFFE6EDF8)
-val DarkOnSurface = Color(0xFFF0F4FC)
-val DarkOnSurfaceVariant = Color(0xFF94A3B8)
-
-// Light Theme
-val LightBackground = Color(0xFFF8FAFC)
-val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceVariant = Color(0xFFE2E8F0)
-val LightOutline = Color(0xFFCBD5E1)
-val LightOnSurface = Color(0xFF0F172A)
+val StateWarn = Color(0xFFE3B65E)
+val StateWarnContainer = Color(0xFF3A3222)
+val StateError = Color(0xFFF2897E)
+val StateErrorContainer = Color(0xFF3D2523)

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.theme.auraBackground
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -28,6 +29,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -95,6 +97,9 @@ import com.example.ui.components.AiTypingIndicator
 import com.example.ui.components.ModelBadge
 import com.example.ui.components.MarkdownRenderer
 import com.example.ui.components.MarkdownText
+import com.example.ui.components.MessageNotice
+import com.example.ui.components.NoticeBox
+import com.example.ui.components.ThinkingRow
 import com.example.ui.components.VoiceOrb
 import com.example.viewmodel.AuraViewModel
 import com.example.voice.VoiceState
@@ -264,7 +269,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
+                .auraBackground()
         ) {
             // Top Header
             ChatTopHeader(
@@ -309,7 +314,8 @@ fun ChatScreen(viewModel: AuraViewModel) {
                             onDismissAction = { viewModel.dismissAction(it) },
                             onSpeakText = { text ->
                                 viewModel.voiceManager.speak(text, identity.voicePitch, identity.voiceSpeed)
-                            }
+                            },
+                            aiName = identity.name
                         )
                     }
 
@@ -318,17 +324,13 @@ fun ChatScreen(viewModel: AuraViewModel) {
                         item(key = "streaming_bubble") {
                             StreamingAiBubble(
                                 text = currentStreamingText ?: "",
-                                modelUsed = streamingModelUsed ?: AiModelUsed.CLOUD
+                                modelUsed = streamingModelUsed ?: AiModelUsed.CLOUD,
+                                aiName = identity.name
                             )
                         }
                     } else if (isGenerating) {
                         item(key = "generating_indicator") {
-                            val activeModel = streamingModelUsed ?: if (routingMode == HybridRoutingMode.FORCE_LOCAL) AiModelUsed.LOCAL else AiModelUsed.CLOUD
-                            AiTypingIndicator(
-                                aiName = identity.name,
-                                statusText = "is thinking...",
-                                modelUsed = activeModel
-                            )
+                            ThinkingRow(aiName = identity.name, modifier = Modifier.padding(vertical = 6.dp))
                         }
                     }
                 }
@@ -372,8 +374,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
 
         // Voice Orb & Input Deck
         Surface(
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 8.dp,
+            color = Color.Transparent, // let the grain show through
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -390,18 +391,19 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        placeholder = { Text("Ask ${identity.name}, propose a task, or state a preference...") },
+                        placeholder = { Text("Message ${identity.name}") },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("chat_input_field"),
-                        shape = RoundedCornerShape(24.dp),
+                        shape = RoundedCornerShape(14.dp),
                         minLines = 1,
                         maxLines = 4,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            focusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                            cursorColor = MaterialTheme.colorScheme.primary
                         )
                     )
 
@@ -420,7 +422,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
                                 }
                             },
                             modifier = Modifier
-                                .clip(CircleShape)
+                                .clip(RoundedCornerShape(10.dp))
                                 .background(MaterialTheme.colorScheme.primary)
                                 .testTag("send_message_button")
                         ) {
@@ -453,14 +455,14 @@ fun ChatScreen(viewModel: AuraViewModel) {
                                 }
                             },
                             modifier = Modifier
-                                .clip(CircleShape)
+                                .clip(RoundedCornerShape(10.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .testTag("mic_input_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Mic,
                                 contentDescription = "Voice Input",
-                                tint = MaterialTheme.colorScheme.primary
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -519,26 +521,19 @@ fun ChatTopHeader(
 
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF00E676))
-                        )
-                        Spacer(Modifier.width(6.dp))
                         Text(
                             text = activeSessionTitle ?: aiName,
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                     Text(
-                        text = "$aiName • $archetype",
+                        text = "$aiName · $archetype",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -663,7 +658,8 @@ fun ChatMessageItem(
     proposedAction: com.example.data.model.TaskActionEntity?,
     onApproveAction: (com.example.data.model.TaskActionEntity) -> Unit,
     onDismissAction: (com.example.data.model.TaskActionEntity) -> Unit,
-    onSpeakText: (String) -> Unit
+    onSpeakText: (String) -> Unit,
+    aiName: String = "Aura"
 ) {
     val isUser = message.sender == Sender.USER
 
@@ -671,82 +667,78 @@ fun ChatMessageItem(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
-        // Model badge for AI messages
-        if (!isUser && message.modelUsed != null) {
-            ModelBadge(
-                modelUsed = message.modelUsed,
-                reasoningExplanation = message.reasoningExplanation,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-        }
-
-        // Bubble
-        Box(
-            modifier = Modifier
-                .clip(
-                    RoundedCornerShape(
-                        topStart = 16.dp,
-                        topEnd = 16.dp,
-                        bottomStart = if (isUser) 16.dp else 4.dp,
-                        bottomEnd = if (isUser) 4.dp else 16.dp
-                    )
+        if (isUser) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
-                .background(
-                    if (isUser)
-                        MaterialTheme.colorScheme.primaryContainer
-                    else
-                        MaterialTheme.colorScheme.surfaceVariant
+                Text(
+                    text = message.getFormattedTime(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .testTag("message_timestamp_${message.id}")
                 )
-                .padding(14.dp)
-        ) {
-            Column {
-                if (isUser) {
-                    Text(
-                        text = message.text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
+            }
+        } else {
+            // AI reply: no bubble, full width, with a tag saying where it came from.
+            val presentation = remember(message.text, message.modelUsed) {
+                MessageNotice.present(message.text, message.modelUsed)
+            }
+            AiReplyLabel(aiName = aiName, modelUsed = message.modelUsed, reasoningExplanation = message.reasoningExplanation)
+            Spacer(Modifier.height(8.dp))
+            presentation.notice?.let { notice ->
+                if (presentation.noticeAfterBody) {
+                    // Incomplete answer: the text that arrived first, then the warning.
+                    AiReplyText(presentation.body)
+                    Spacer(Modifier.height(10.dp))
+                    NoticeBox(notice)
                 } else {
-                    MarkdownText(
-                        text = message.text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        codeBackground = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-                    )
-                }
-
-                Spacer(Modifier.height(6.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = if (isUser) Arrangement.End else Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (!isUser) {
-                        IconButton(
-                            onClick = { onSpeakText(MarkdownRenderer.plainText(message.text)) },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                                contentDescription = "Read Aloud",
-                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                                modifier = Modifier.size(15.dp)
-                            )
-                        }
+                    NoticeBox(notice)
+                    if (presentation.body.isNotBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        AiReplyText(presentation.body)
                     }
+                }
+            } ?: AiReplyText(presentation.body)
 
-                    Text(
-                        text = message.getFormattedTime(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isUser)
-                            MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.65f)
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                        fontSize = 10.sp,
-                        modifier = Modifier.testTag("message_timestamp_${message.id}")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = { onSpeakText(MarkdownRenderer.plainText(presentation.body.ifBlank { message.text })) },
+                    modifier = Modifier.offset(x = (-12).dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = "Read Aloud",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
+                Text(
+                    text = message.getFormattedTime(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 10.sp,
+                    modifier = Modifier.testTag("message_timestamp_${message.id}")
+                )
             }
         }
 
@@ -762,8 +754,38 @@ fun ChatMessageItem(
     }
 }
 
+/** "STARAI  [Claude]" — the assistant's name and where this reply came from. */
 @Composable
-fun StreamingAiBubble(text: String, modelUsed: AiModelUsed) {
+private fun AiReplyLabel(aiName: String, modelUsed: AiModelUsed?, reasoningExplanation: String? = null) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = aiName.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            letterSpacing = 0.8.sp
+        )
+        if (modelUsed != null) {
+            ModelBadge(modelUsed = modelUsed, reasoningExplanation = reasoningExplanation)
+        }
+    }
+}
+
+@Composable
+private fun AiReplyText(text: String, modifier: Modifier = Modifier) {
+    MarkdownText(
+        text = text,
+        modifier = modifier,
+        style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.secondary,
+        codeBackground = MaterialTheme.colorScheme.surfaceVariant
+    )
+}
+
+@Composable
+fun StreamingAiBubble(text: String, modelUsed: AiModelUsed, aiName: String = "Aura") {
     val infiniteTransition = rememberInfiniteTransition(label = "cursor_blink")
     val cursorAlpha by infiniteTransition.animateFloat(
         initialValue = 0.2f,
@@ -781,29 +803,16 @@ fun StreamingAiBubble(text: String, modelUsed: AiModelUsed) {
             .testTag("streaming_ai_bubble"),
         horizontalAlignment = Alignment.Start
     ) {
-        ModelBadge(modelUsed = modelUsed, modifier = Modifier.padding(bottom = 4.dp))
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 4.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(14.dp)
-        ) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                MarkdownText(
-                    text = text,
-                    modifier = Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    codeBackground = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-                )
-                Box(
-                    modifier = Modifier
-                        .padding(start = 3.dp, bottom = 2.dp)
-                        .size(width = 3.dp, height = 15.dp)
-                        .clip(RoundedCornerShape(1.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = cursorAlpha))
-                )
-            }
+        AiReplyLabel(aiName = aiName, modelUsed = modelUsed)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            AiReplyText(text, modifier = Modifier.weight(1f, fill = false))
+            Box(
+                modifier = Modifier
+                    .padding(start = 3.dp, bottom = 4.dp)
+                    .size(width = 2.dp, height = 16.dp)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = cursorAlpha))
+            )
         }
     }
 }
