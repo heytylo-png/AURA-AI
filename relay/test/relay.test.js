@@ -1,0 +1,195 @@
+// Run with: node --test relay/test/
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createHandler, validateChatBody, RelayError } from "../src/index.js";
+
+const PROJECT = "aura-test-project";
+const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
+const ALLOWED = "user-allowed";
+
+const keyPair = await crypto.subtle.generateKey(
+  { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+  true,
+  ["sign", "verify"]
+);
+const otherKeyPair = await crypto.subtle.generateKey(
+  { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+  true,
+  ["sign", "verify"]
+);
+const publicJwk = { ...(await crypto.subtle.exportKey("jwk", keyPair.publicKey)), kid: "k1", alg: "RS256", use: "sig" };
+
+const b64url = (bytes) => Buffer.from(bytes).toString("base64url");
+const enc = (obj) => b64url(new TextEncoder().encode(JSON.stringify(obj)));
+
+async function makeToken(claims = {}, { kid = "k1", key = keyPair.privateKey, alg = "RS256" } = {}) {
+  const t = Math.floor(NOW / 1000);
+  const payload = {
+    iss: `https://securetoken.google.com/${PROJECT}`,
+    aud: PROJECT,
+    sub: ALLOWED,
+    iat: t - 10,
+    exp: t + 3600,
+    auth_time: t - 10,
+    ...claims,
+  };
+  const signingInput = `${enc({ alg, kid, typ: "JWT" })}.${enc(payload)}`;
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(signingInput));
+  return `${signingInput}.${b64url(new Uint8Array(sig))}`;
+}
+
+function setup({ upstream } = {}) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (String(url).includes("googleapis.com")) {
+      return new Response(JSON.stringify({ keys: [publicJwk] }), {
+        headers: { "content-type": "application/json", "cache-control": "public, max-age=1000" },
+      });
+    }
+    if (String(url) === "https://api.anthropic.com/v1/messages") {
+      return upstream ? upstream(init) : new Response("event: message_stop\ndata: {}\n\n", { headers: { "content-type": "text/event-stream" } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const handle = createHandler({ fetchImpl, now: () => NOW });
+  const env = { ANTHROPIC_API_KEY: "sk-test", FIREBASE_PROJECT_ID: PROJECT, ALLOWED_UIDS: `someone-else, ${ALLOWED}` };
+  return { handle, env, calls };
+}
+
+const chatBody = { system: "You are Aura.", messages: [{ role: "user", content: "Hello" }] };
+
+async function post(handle, env, { token, body = chatBody } = {}) {
+  const headers = { "content-type": "application/json" };
+  if (token) headers.authorization = `Bearer ${token}`;
+  return handle(new Request("https://relay.example/v1/chat", { method: "POST", headers, body: JSON.stringify(body) }), env);
+}
+
+test("valid token from an allowed user streams Claude's response with server-fixed settings", async () => {
+  const { handle, env, calls } = setup();
+  const res = await post(handle, env, { token: await makeToken() });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "text/event-stream");
+  assert.match(await res.text(), /message_stop/);
+
+  const upstream = calls.find((c) => c.url.startsWith("https://api.anthropic.com"));
+  assert.equal(upstream.init.headers["x-api-key"], "sk-test");
+  assert.equal(upstream.init.headers["anthropic-version"], "2023-06-01");
+  const sent = JSON.parse(upstream.init.body);
+  assert.equal(sent.model, "claude-sonnet-5-5");
+  assert.equal(sent.max_tokens, 2048);
+  assert.equal(sent.stream, true);
+  assert.equal(sent.system, "You are Aura.");
+  assert.deepEqual(sent.messages, [{ role: "user", content: "Hello" }]);
+});
+
+test("the app cannot choose the model or output size", async () => {
+  const { handle, env, calls } = setup();
+  await post(handle, env, {
+    token: await makeToken(),
+    body: { ...chatBody, model: "claude-opus-5-5", max_tokens: 64000 },
+  });
+  const sent = JSON.parse(calls.find((c) => c.url.startsWith("https://api.anthropic.com")).init.body);
+  assert.equal(sent.model, "claude-sonnet-5-5");
+  assert.equal(sent.max_tokens, 2048);
+});
+
+test("requests without a token, or with a bad one, never reach Claude", async () => {
+  const { handle, env, calls } = setup();
+  const cases = [
+    [undefined, 401],
+    ["not-a-jwt", 401],
+    [await makeToken({}, { key: otherKeyPair.privateKey }), 401], // forged signature
+    [await makeToken({}, { kid: "unknown" }), 401],
+    [await makeToken({}, { alg: "HS256" }), 401],
+    [await makeToken({ aud: "other-project" }), 401],
+    [await makeToken({ iss: "https://securetoken.google.com/other-project" }), 401],
+    [await makeToken({ exp: Math.floor(NOW / 1000) - 3600 }), 401], // expired
+    [await makeToken({ iat: Math.floor(NOW / 1000) + 3600 }), 401], // issued in the future
+    [await makeToken({ sub: "" }), 401],
+  ];
+  for (const [token, status] of cases) {
+    const res = await post(handle, env, { token });
+    assert.equal(res.status, status, `token ${String(token).slice(0, 20)} -> ${res.status}`);
+  }
+  assert.equal(calls.filter((c) => c.url.startsWith("https://api.anthropic.com")).length, 0);
+});
+
+test("a valid user who is not on the allowlist gets 403 with their access ID", async () => {
+  const { handle, env, calls } = setup();
+  const res = await post(handle, env, { token: await makeToken({ sub: "stranger-123" }) });
+  assert.equal(res.status, 403);
+  const body = await res.json();
+  assert.equal(body.error.type, "user_not_allowed");
+  assert.match(body.error.message, /stranger-123/);
+  assert.equal(calls.filter((c) => c.url.startsWith("https://api.anthropic.com")).length, 0);
+});
+
+test("an empty allowlist lets nobody in", async () => {
+  const { handle, env } = setup();
+  const res = await post(handle, { ...env, ALLOWED_UIDS: "" }, { token: await makeToken() });
+  assert.equal(res.status, 403);
+});
+
+test("missing configuration is reported, not hidden", async () => {
+  const { handle, env } = setup();
+  const res = await post(handle, { ...env, ANTHROPIC_API_KEY: "" }, { token: await makeToken() });
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).error.type, "relay_not_configured");
+});
+
+test("Claude API errors are passed back with their message; a bad relay key becomes 502", async () => {
+  const bad = (status, message) => () =>
+    new Response(JSON.stringify({ type: "error", error: { type: "x", message } }), { status, headers: { "content-type": "application/json" } });
+
+  let { handle, env } = setup({ upstream: bad(429, "Rate limited") });
+  let res = await post(handle, env, { token: await makeToken() });
+  assert.equal(res.status, 429);
+  assert.match((await res.json()).error.message, /Rate limited/);
+
+  ({ handle, env } = setup({ upstream: bad(401, "invalid x-api-key") }));
+  res = await post(handle, env, { token: await makeToken() });
+  assert.equal(res.status, 502);
+  assert.match((await res.json()).error.message, /invalid x-api-key/);
+});
+
+test("signing keys are fetched once and cached", async () => {
+  const { handle, env, calls } = setup();
+  await post(handle, env, { token: await makeToken() });
+  await post(handle, env, { token: await makeToken() });
+  assert.equal(calls.filter((c) => c.url.includes("googleapis.com")).length, 1);
+});
+
+test("health reports configuration without secrets", async () => {
+  const { handle, env } = setup();
+  const res = await handle(new Request("https://relay.example/health"), env);
+  const body = await res.json();
+  assert.deepEqual(body, { ok: true, model: "claude-sonnet-5-5", allowedUsers: 2 });
+  assert.ok(!JSON.stringify(body).includes("sk-test"));
+});
+
+test("other paths and methods are rejected", async () => {
+  const { handle, env } = setup();
+  assert.equal((await handle(new Request("https://relay.example/v1/other", { method: "POST" }), env)).status, 404);
+  assert.equal((await handle(new Request("https://relay.example/v1/chat"), env)).status, 405);
+});
+
+test("request bodies are validated", () => {
+  const bad = [
+    null,
+    { messages: [] },
+    { messages: [{ role: "system", content: "x" }] },
+    { messages: [{ role: "user", content: "   " }] },
+    { messages: [{ role: "assistant", content: "hi" }] },
+    { messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }] },
+    { messages: Array.from({ length: 41 }, () => ({ role: "user", content: "x" })) },
+    { system: "x".repeat(8001), messages: [{ role: "user", content: "x" }] },
+    { messages: [{ role: "user", content: "x".repeat(100_001) }] },
+  ];
+  for (const b of bad) assert.throws(() => validateChatBody(b), RelayError);
+
+  assert.deepEqual(
+    validateChatBody({ messages: [{ role: "user", content: "a", extra: 1 }, { role: "assistant", content: "b" }, { role: "user", content: "c" }] }),
+    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }] }
+  );
+});

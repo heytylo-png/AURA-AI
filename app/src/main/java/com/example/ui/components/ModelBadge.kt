@@ -71,7 +71,7 @@ fun ModelBadge(
                 modifier = Modifier.size(13.dp)
             )
             Text(
-                text = when { isNone -> "Not answered"; isLocal -> "On this phone"; else -> "Gemini" },
+                text = when { isNone -> "Not answered"; isLocal -> "On this phone"; else -> "Claude" },
                 color = textColor,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold
@@ -107,7 +107,7 @@ fun ModelBadge(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = when { isNone -> "No answer"; isLocal -> "Answered on this phone"; else -> "Answered by Gemini (cloud)" },
+                        text = when { isNone -> "No answer"; isLocal -> "Answered on this phone"; else -> "Answered by Claude" },
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -124,7 +124,7 @@ fun ModelBadge(
                         text = when {
                             isNone -> "No model produced this reply. It explains why your message wasn't answered."
                             isLocal -> "Aura's built-in offline replies. They follow simple keyword rules and are not an AI model. The note above says whether anything was sent."
-                            else -> "Sent to Google's Gemini through Firebase AI Logic."
+                            else -> "Anthropic's Claude, reached through your private Aura relay."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

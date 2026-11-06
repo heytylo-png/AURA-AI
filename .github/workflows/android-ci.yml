@@ -81,6 +81,8 @@ jobs:
       - name: Assemble debug APK
         env:
           AURA_KEYSTORE_PASSWORD: ${{ github.event_name == 'pull_request' && 'android' || secrets.AURA_KEYSTORE_PASSWORD }}
+          # Claude relay address; empty for PR builds (secrets are not available there).
+          AURA_RELAY_URL: ${{ github.event_name != 'pull_request' && secrets.AURA_RELAY_URL || '' }}
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Upload Aura debug APK

@@ -171,7 +171,7 @@ fun SettingsScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "Your User Name and Primary Interest are stored locally on device and automatically injected into the system prompt for ${identity.name} (both Cloud Gemini and Edge Offline reasoning).",
+                            text = "Your User Name and Primary Interest are stored locally on device and automatically injected into the system prompt for ${identity.name} (on-device replies, and Claude when you allow personal context).",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 18.sp
@@ -311,7 +311,7 @@ fun SettingsScreen(
                     Text("Cloud AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "When enabled, the message you send in a chat may be sent to Google Gemini for a response. Keep this off to use on-device responses only. Aura does not send your saved memories, projects, or profile settings to cloud AI.",
+                        text = "When enabled, the message you send in a chat is sent to Anthropic's Claude through your private Aura relay. Keep this off to use on-device replies only. Aura does not send your saved memories, projects, or profile settings to cloud AI.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -328,43 +328,45 @@ fun SettingsScreen(
                             modifier = Modifier.testTag("cloud_chat_consent_switch")
                         )
                     }
-                }
-            }
 
-            // Test builds only: the App Check debug token that must be registered in Firebase
-            // before Gemini accepts requests from this phone.
-            val appContext = androidx.compose.ui.platform.LocalContext.current
-            val appCheckToken = remember { com.example.ai.appCheckDebugToken(appContext) }
-            if (appCheckToken != null) {
-                val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-                var copied by remember { mutableStateOf(false) }
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Gemini setup (test build)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(6.dp))
+                    // Claude relay access ID: the owner adds it to the relay's allowlist once.
+                    val relayAccessId by viewModel.relayAccessId.collectAsState()
+                    val relayAccessStatus by viewModel.relayAccessStatus.collectAsState()
+                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = if (viewModel.relayConfigured) "Claude relay: set up in this build" else "Claude relay: not set up in this build (no relay address)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    val accessId = relayAccessId
+                    if (accessId == null) {
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = viewModel::requestRelayAccessId,
+                            modifier = Modifier.testTag("relay_get_access_id")
+                        ) { Text("Get access ID") }
+                    } else {
+                        Text("Your access ID", style = MaterialTheme.typography.labelMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = accessId,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f).testTag("relay_access_id")
+                            )
+                            androidx.compose.material3.TextButton(
+                                onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(accessId)) }
+                            ) { Text("Copy") }
+                        }
                         Text(
-                            text = "Add this token once in the Firebase console: App Check \u2192 Apps \u2192 your Android app \u2192 Manage debug tokens. Treat it like a password and don't share it.",
+                            text = "Add it to the AURA_ALLOWED_UIDS secret on GitHub so the relay accepts this phone.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = appCheckToken,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            modifier = Modifier.testTag("app_check_debug_token")
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        androidx.compose.material3.OutlinedButton(onClick = {
-                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(appCheckToken))
-                            copied = true
-                        }) {
-                            Text(if (copied) "Copied" else "Copy token")
-                        }
+                    }
+                    relayAccessStatus?.let {
+                        Spacer(Modifier.height(4.dp))
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }

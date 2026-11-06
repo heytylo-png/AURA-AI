@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.flow
 enum class HybridRoutingMode(val label: String, val description: String) {
     AUTO_HYBRID("Auto Hybrid Router", "Routes simple & offline tasks to Local, complex reasoning to Cloud"),
     FORCE_LOCAL("Local Model Only", "100% on-device offline edge reasoning"),
-    FORCE_CLOUD("Cloud Gemini 3.8 Flash", "Frontier multimodal cloud model for maximum capability")
+    FORCE_CLOUD("Cloud Claude", "Anthropic's Claude via your private Aura relay")
 }
 
 sealed interface HybridAiState {
@@ -36,7 +36,7 @@ sealed interface HybridAiState {
 class HybridAiEngine(
     private val context: Context,
     private val localEngine: LocalModelEngine = LocalModelEngine(),
-    private val cloudEngine: AiProvider = CloudModelEngine(),
+    private val cloudEngine: AiProvider = ClaudeRelayProvider.create(),
     private val onlineStatusOverride: (() -> Boolean)? = null
 ) {
 
@@ -175,7 +175,7 @@ class HybridAiEngine(
                         fullText = done.fullText,
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
-                        reasoningRationale = "Answered by ${done.modelName ?: "Gemini"} (cloud). Only this message was sent; no memories, projects or profile.",
+                        reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. Only this message was sent; no memories, projects or profile.",
                         proposedAction = localScan.proposedAction
                     )
                 )
@@ -187,15 +187,15 @@ class HybridAiEngine(
                         fullText = "$streamedText\n\n\u26a0 This answer is incomplete: ${failure ?: "the stream ended early"}",
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = 0L,
-                        reasoningRationale = "Gemini's reply was cut off: ${failure ?: "the stream ended early"}",
+                        reasoningRationale = "Claude's reply was cut off: ${failure ?: "the stream ended early"}",
                         proposedAction = null
                     )
                 )
             }
             mode == HybridRoutingMode.FORCE_CLOUD -> {
                 emit(notice(
-                    "Gemini couldn't answer this message.\n\n${failure ?: "No reply was received."}",
-                    "Cloud request failed: ${failure ?: "no reply"}. Your message was sent to Gemini."
+                    "Claude couldn't answer this message.\n\n${failure ?: "No reply was received."}",
+                    "Cloud request failed: ${failure ?: "no reply"}. Your message was sent to the relay."
                 ))
             }
             else -> {
@@ -203,11 +203,11 @@ class HybridAiEngine(
                 val localFallback = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
                 emit(
                     HybridAiState.Completed(
-                        fullText = "\u26a0 Gemini is unavailable (${failure ?: "no reply"}). Offline reply:\n\n${localFallback.responseText}",
+                        fullText = "\u26a0 Claude is unavailable (${failure ?: "no reply"}). Offline reply:\n\n${localFallback.responseText}",
                         modelUsed = AiModelUsed.LOCAL,
                         latencyMs = localFallback.latencyMs,
                         reasoningRationale = "Cloud request failed (${failure ?: "no reply"}), so Aura answered on this phone. " +
-                            "Your message was sent to Gemini before it failed.",
+                            "Your message was sent to the relay before it failed.",
                         proposedAction = localFallback.proposedAction
                     )
                 )

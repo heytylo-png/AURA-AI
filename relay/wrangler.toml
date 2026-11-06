@@ -1,0 +1,10 @@
+# Cloudflare Worker that relays Aura's chat requests to the Claude API.
+# Deployed by .github/workflows/relay.yml; secrets are set there, never stored here.
+name = "aura-relay"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+[vars]
+ANTHROPIC_MODEL = "claude-sonnet-5-5"
+MAX_OUTPUT_TOKENS = "2048"
