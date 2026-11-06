@@ -8,6 +8,7 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.recaptcha.RecaptchaAppCheckProviderFactory
+import java.util.UUID
 
 private const val TAG = "AppCheckInit"
 
@@ -18,7 +19,8 @@ private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 
 /**
  * Authoritative App Check initialization helper required for Firebase AI Logic.
- * In debug builds, persists the debug token from Intent extras and installs DebugAppCheckProviderFactory.
+ * In debug builds, installs DebugAppCheckProviderFactory with a persistent debug token (created once,
+ * or taken from the FIREBASE_APPCHECK_DEBUG_TOKEN intent extra).
  * In release builds, installs RecaptchaAppCheckProviderFactory using the site key resource.
  */
 fun configureAppCheck(context: Context, intent: Intent?) {
@@ -28,43 +30,22 @@ fun configureAppCheck(context: Context, intent: Intent?) {
         }
 
         if (BuildConfig.DEBUG) {
-            val debugToken = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
-            val persistenceKey = FirebaseApp.getInstance().persistenceKey
-            val prefs = context.getSharedPreferences(
-                "$DEBUG_STORE_PREFIX$persistenceKey",
-                Context.MODE_PRIVATE
-            )
-
-            if (!debugToken.isNullOrEmpty()) {
-                prefs.edit()
-                    .putString(DEBUG_SECRET_KEY, debugToken)
-                    .commit()
-                Log.d(TAG, "App Check debug secret configured successfully from intent.")
-                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                    DebugAppCheckProviderFactory.getInstance()
-                )
-            } else {
-                val storedSecret = prefs.getString(DEBUG_SECRET_KEY, null)
-                val resId = context.resources.getIdentifier(RECAPTCHA_SITE_KEY_RES, "string", context.packageName)
-                val siteKey = if (resId != 0) context.getString(resId) else ""
-
-                if (!storedSecret.isNullOrEmpty()) {
-                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        DebugAppCheckProviderFactory.getInstance()
-                    )
-                    Log.d(TAG, "DebugAppCheckProviderFactory installed with existing secret.")
-                } else if (siteKey.isNotBlank()) {
-                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        RecaptchaAppCheckProviderFactory.getInstance(siteKey)
-                    )
-                    Log.d(TAG, "RecaptchaAppCheckProviderFactory installed for debug session.")
-                } else {
-                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        DebugAppCheckProviderFactory.getInstance()
-                    )
-                    Log.d(TAG, "DebugAppCheckProviderFactory installed.")
-                }
+            // Test builds always use the App Check debug provider with a token that stays the
+            // same across updates. The token must be added once in the Firebase console
+            // (App Check -> Apps -> Manage debug tokens); Settings shows it.
+            // The reCAPTCHA provider is only for release builds: test builds sent tokens that
+            // the server rejected ("Firebase App Check token is invalid").
+            val fromIntent = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
+            val prefs = debugStore(context)
+            if (!fromIntent.isNullOrBlank()) {
+                prefs.edit().putString(DEBUG_SECRET_KEY, fromIntent).commit()
+            } else if (prefs.getString(DEBUG_SECRET_KEY, null).isNullOrBlank()) {
+                prefs.edit().putString(DEBUG_SECRET_KEY, UUID.randomUUID().toString()).commit()
             }
+            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                DebugAppCheckProviderFactory.getInstance()
+            )
+            Log.d(TAG, "DebugAppCheckProviderFactory installed.")
         } else {
             val resId = context.resources.getIdentifier(RECAPTCHA_SITE_KEY_RES, "string", context.packageName)
             if (resId != 0) {
@@ -84,4 +65,22 @@ fun configureAppCheck(context: Context, intent: Intent?) {
     } catch (e: Exception) {
         Log.e(TAG, "Failed to initialize Firebase App Check", e)
     }
+}
+
+private fun debugStore(context: Context) = context.getSharedPreferences(
+    "$DEBUG_STORE_PREFIX${FirebaseApp.getInstance().persistenceKey}",
+    Context.MODE_PRIVATE
+)
+
+/**
+ * The App Check debug token this test build sends, so the user can register it in the Firebase
+ * console. Null in release builds or before App Check is configured. Treat it like a password:
+ * anyone with it can pass App Check for this Firebase project until it is removed in the console.
+ */
+fun appCheckDebugToken(context: Context): String? {
+    if (!BuildConfig.DEBUG) return null
+    return runCatching {
+        if (FirebaseApp.getApps(context).isEmpty()) return null
+        debugStore(context).getString(DEBUG_SECRET_KEY, null)?.takeIf { it.isNotBlank() }
+    }.getOrNull()
 }

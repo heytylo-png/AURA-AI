@@ -161,7 +161,12 @@ User Query: $userMessage
                 .map { t -> "${t.javaClass.simpleName}${t.message?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""}" }
                 .distinct()
                 .toList()
-            return parts.joinToString(" \u2190 ").take(500)
+            val text = parts.joinToString(" \u2190 ").take(500)
+            return if (text.contains("App Check", ignoreCase = true)) "$text\n\n$APP_CHECK_HINT" else text
         }
+
+        const val APP_CHECK_HINT =
+            "Firebase didn't accept this phone. In a test build, copy the token from Settings \u2192 " +
+                "Gemini setup and add it in the Firebase console under App Check \u2192 Manage debug tokens."
     }
 }

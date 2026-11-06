@@ -246,4 +246,13 @@ class AiProviderContractTest {
         assertTrue(text.contains("UnknownHostException: firebasevertexai.googleapis.com"))
     }
 
+    @Test
+    fun appCheckRejectionExplainsHowToFixIt() {
+        val text = com.example.ai.CloudModelEngine.describeFailure(
+            IllegalStateException("Firebase App Check token is invalid.")
+        )
+        assertTrue(text.startsWith("IllegalStateException: Firebase App Check token is invalid."))
+        assertTrue(text.endsWith(com.example.ai.CloudModelEngine.APP_CHECK_HINT))
+    }
+
 }
