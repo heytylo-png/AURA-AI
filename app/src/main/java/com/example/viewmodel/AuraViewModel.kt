@@ -3,6 +3,7 @@ package com.example.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai.CloudHistory
 import com.example.ai.HybridAiEngine
 import com.example.ai.HybridAiState
 import com.example.ai.HybridRoutingMode
@@ -346,6 +347,12 @@ class AuraViewModel @JvmOverloads constructor(
             }
             val currentSessionId = _activeSession.value?.id ?: 1L
 
+            // Earlier Claude exchanges in this chat, read before the new message is saved.
+            // Only used if this message goes to the cloud.
+            val cloudHistory = CloudHistory.fromMessages(
+                chatRepository.getMessagesForSession(currentSessionId).first()
+            )
+
             // 1. Insert User Message
             val userMsg = ChatMessageEntity(
                 sender = Sender.USER,
@@ -376,7 +383,8 @@ class AuraViewModel @JvmOverloads constructor(
                 projects = projects,
                 currentProject = currentProj,
                 userSettings = userSettings.value,
-                allowCloudRequest = cloudChatEnabled.value
+                allowCloudRequest = cloudChatEnabled.value,
+                history = cloudHistory
             ).collect { state ->
                 when (state) {
                     is HybridAiState.Starting -> {}

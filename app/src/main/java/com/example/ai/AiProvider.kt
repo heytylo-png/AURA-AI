@@ -16,7 +16,9 @@ data class AiProviderRequest(
     val activeMemories: List<MemoryEntity> = emptyList(),
     val currentProject: ProjectEntity? = null,
     val userSettings: UserSettingsEntity? = null,
-    val allowPersonalContext: Boolean = false
+    val allowPersonalContext: Boolean = false,
+    /** Earlier turns of this conversation, oldest first; see [CloudHistory]. */
+    val history: List<ChatTurn> = emptyList()
 )
 
 sealed interface AiProviderEvent {
@@ -51,10 +53,27 @@ interface AiProvider {
  * filtering policy is implemented centrally.
  */
 internal fun AiProviderRequest.withoutPersonalContext(): AiProviderRequest = copy(
-    // Use the app-owned default identity so custom name/directives/core values do not leak.
-    identity = AiIdentityConfig(),
+    identity = identity.forCloud(),
     activeMemories = emptyList(),
     currentProject = null,
     userSettings = null,
     allowPersonalContext = false
 )
+
+/** Longest assistant name sent to the cloud. */
+internal const val MAX_CLOUD_NAME_LENGTH = 40
+
+/**
+ * The parts of the assistant's identity that may go to the cloud: its name, personality preset and
+ * answer length. Custom directives and core values are free text that can hold personal details,
+ * so they are replaced with the app defaults until a consent setting covers them.
+ */
+internal fun AiIdentityConfig.forCloud(): AiIdentityConfig {
+    val defaults = AiIdentityConfig()
+    val cleanName = name.replace(Regex("\\s+"), " ").trim().take(MAX_CLOUD_NAME_LENGTH)
+    return defaults.copy(
+        name = cleanName.ifBlank { defaults.name },
+        archetype = archetype,
+        responseLength = responseLength
+    )
+}

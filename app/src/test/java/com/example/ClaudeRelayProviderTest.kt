@@ -160,4 +160,26 @@ class ClaudeRelayProviderTest {
         assertEquals(null, ClaudeRelayProvider.parseSseLine("""data: {"type":"ping"}"""))
         assertEquals(null, ClaudeRelayProvider.parseSseLine("data: not json"))
     }
+
+    @Test
+    fun `earlier turns are sent before the new message`() = runBlocking {
+        server.enqueue(sse(delta("ok"), """{"type":"message_stop"}"""))
+        val withHistory = request.copy(
+            history = listOf(
+                com.example.ai.ChatTurn(com.example.ai.ChatTurn.Role.USER, "first"),
+                com.example.ai.ChatTurn(com.example.ai.ChatTurn.Role.ASSISTANT, "reply")
+            )
+        )
+
+        provider().generateStream(withHistory).toList()
+
+        val messages = JSONObject(server.takeRequest().body.readUtf8()).getJSONArray("messages")
+        assertEquals(3, messages.length())
+        assertEquals("user", messages.getJSONObject(0).getString("role"))
+        assertEquals("first", messages.getJSONObject(0).getString("content"))
+        assertEquals("assistant", messages.getJSONObject(1).getString("role"))
+        assertEquals("reply", messages.getJSONObject(1).getString("content"))
+        assertEquals("user", messages.getJSONObject(2).getString("role"))
+        assertEquals("Hello Claude", messages.getJSONObject(2).getString("content"))
+    }
 }

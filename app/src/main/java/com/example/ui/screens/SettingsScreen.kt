@@ -311,7 +311,7 @@ fun SettingsScreen(
                     Text("Cloud AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "When enabled, the message you send in a chat is sent to Anthropic's Claude through your private Aura relay. Keep this off to use on-device replies only. Aura does not send your saved memories, projects, or profile settings to cloud AI.",
+                        text = "When enabled, the message you send in a chat is sent to Anthropic's Claude through your private Aura relay, together with that chat's earlier Claude exchanges (so it can follow the conversation) and the assistant's name and personality. Keep this off to use on-device replies only. Aura does not send your saved memories, projects, profile settings, custom directives or core values, or messages that were answered on this phone.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

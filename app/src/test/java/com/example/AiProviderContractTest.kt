@@ -257,4 +257,56 @@ class AiProviderContractTest {
         assertTrue(result.reasoningRationale.startsWith("Answered by Claude via your Aura relay"))
     }
 
+
+    // ---- What crosses the cloud boundary: name and personality yes, free-text identity no ----
+
+    @Test
+    fun cloudRequestKeepsAssistantNameAndPersonalityButNotDirectivesOrValues() {
+        val identity = com.example.data.model.AiIdentityConfig(
+            name = "  Starai\n ",
+            archetype = com.example.data.model.PersonalityArchetype.CREATIVE_STRATEGIST,
+            responseLength = com.example.data.model.ResponseLength.values().last(),
+            coreValues = "private value",
+            customDirectives = "private directive"
+        )
+        val sent = AiProviderRequest(prompt = "Hi", identity = identity).withoutPersonalContext().identity
+        val defaults = com.example.data.model.AiIdentityConfig()
+
+        assertEquals("Starai", sent.name)
+        assertEquals(com.example.data.model.PersonalityArchetype.CREATIVE_STRATEGIST, sent.archetype)
+        assertEquals(identity.responseLength, sent.responseLength)
+        assertEquals(defaults.coreValues, sent.coreValues)
+        assertEquals(defaults.customDirectives, sent.customDirectives)
+    }
+
+    @Test
+    fun cloudNameIsShortenedAndNeverBlank() {
+        val long = com.example.data.model.AiIdentityConfig(name = "x".repeat(200))
+        assertEquals(40, AiProviderRequest(prompt = "Hi", identity = long).withoutPersonalContext().identity.name.length)
+
+        val blank = com.example.data.model.AiIdentityConfig(name = "   ")
+        assertEquals("Aura", AiProviderRequest(prompt = "Hi", identity = blank).withoutPersonalContext().identity.name)
+    }
+
+    @Test
+    fun historyReachesTheCloudProviderAndIsDescribedInTheRationale() {
+        val provider = FakeProvider()
+        val history = listOf(
+            com.example.ai.ChatTurn(com.example.ai.ChatTurn.Role.USER, "earlier question"),
+            com.example.ai.ChatTurn(com.example.ai.ChatTurn.Role.ASSISTANT, "earlier answer")
+        )
+        val result = runBlocking {
+            engine(provider).processHybridRequest(
+                prompt = "Please analyze this complex topic in detail",
+                mode = HybridRoutingMode.FORCE_CLOUD,
+                identity = com.example.data.model.AiIdentityConfig(),
+                activeMemories = emptyList(),
+                projects = emptyList(),
+                allowCloudRequest = true,
+                history = history
+            ).toList()
+        }
+        assertEquals(history, requireNotNull(provider.receivedRequest).history)
+        assertTrue(completed(result).reasoningRationale.contains("last 1 earlier Claude exchange in this chat"))
+    }
 }

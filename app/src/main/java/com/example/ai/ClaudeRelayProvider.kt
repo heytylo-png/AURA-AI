@@ -62,7 +62,7 @@ class ClaudeRelayProvider(
                 "system",
                 AuraPrompt.system(request.identity, request.activeMemories, request.currentProject, request.userSettings)
             )
-            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", request.prompt)))
+            .put("messages", messagesJson(request))
             .toString()
 
         val startedAt = clock()
@@ -172,6 +172,15 @@ class ClaudeRelayProvider(
             .readTimeout(60, TimeUnit.SECONDS)
             .callTimeout(3, TimeUnit.MINUTES)
             .build()
+
+        /** Earlier turns, oldest first, then the new message. */
+        fun messagesJson(request: AiProviderRequest): JSONArray {
+            val array = JSONArray()
+            (request.history + ChatTurn(ChatTurn.Role.USER, request.prompt)).forEach { turn ->
+                array.put(JSONObject().put("role", turn.role.wire).put("content", turn.text))
+            }
+            return array
+        }
 
         /** The provider used by the app: relay address from the build, anonymous Firebase sign-in. */
         fun create(): ClaudeRelayProvider = ClaudeRelayProvider(BuildConfig.AURA_RELAY_URL, FirebaseRelayAuth())
