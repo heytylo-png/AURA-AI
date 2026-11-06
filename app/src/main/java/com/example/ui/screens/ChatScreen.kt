@@ -93,6 +93,8 @@ import com.example.data.model.Sender
 import com.example.ui.components.ActionProposalCard
 import com.example.ui.components.AiTypingIndicator
 import com.example.ui.components.ModelBadge
+import com.example.ui.components.MarkdownRenderer
+import com.example.ui.components.MarkdownText
 import com.example.ui.components.VoiceOrb
 import com.example.viewmodel.AuraViewModel
 import com.example.voice.VoiceState
@@ -698,11 +700,20 @@ fun ChatMessageItem(
                 .padding(14.dp)
         ) {
             Column {
-                Text(
-                    text = message.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (isUser) {
+                    Text(
+                        text = message.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                } else {
+                    MarkdownText(
+                        text = message.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        codeBackground = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                    )
+                }
 
                 Spacer(Modifier.height(6.dp))
 
@@ -713,7 +724,7 @@ fun ChatMessageItem(
                 ) {
                     if (!isUser) {
                         IconButton(
-                            onClick = { onSpeakText(message.text) },
+                            onClick = { onSpeakText(MarkdownRenderer.plainText(message.text)) },
                             modifier = Modifier.size(24.dp)
                         ) {
                             Icon(
@@ -778,10 +789,12 @@ fun StreamingAiBubble(text: String, modelUsed: AiModelUsed) {
                 .padding(14.dp)
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(
+                MarkdownText(
                     text = text,
+                    modifier = Modifier.weight(1f, fill = false),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    codeBackground = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
                 )
                 Box(
                     modifier = Modifier

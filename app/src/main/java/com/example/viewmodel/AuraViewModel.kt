@@ -410,7 +410,7 @@ class AuraViewModel @JvmOverloads constructor(
                         // If auto-speak enabled, speak the answer
                         if (_identity.value.autoSpeakResponses) {
                             voiceManager.speak(
-                                text = state.fullText.take(300),
+                                text = com.example.ui.components.MarkdownRenderer.plainText(state.fullText).take(300),
                                 pitch = _identity.value.voicePitch,
                                 speed = _identity.value.voiceSpeed
                             )
