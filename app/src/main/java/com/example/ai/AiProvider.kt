@@ -21,7 +21,8 @@ data class AiProviderRequest(
 
 sealed interface AiProviderEvent {
     data class Content(val text: String) : AiProviderEvent
-    data class Completed(val fullText: String, val latencyMs: Long) : AiProviderEvent
+    /** [modelName] is the model that actually answered, shown to the user (e.g. after a fallback). */
+    data class Completed(val fullText: String, val latencyMs: Long, val modelName: String? = null) : AiProviderEvent
     data class Error(val message: String) : AiProviderEvent
 }
 

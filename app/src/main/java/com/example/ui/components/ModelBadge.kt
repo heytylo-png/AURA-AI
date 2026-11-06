@@ -46,9 +46,11 @@ fun ModelBadge(
     var showDialog by remember { mutableStateOf(false) }
 
     val isLocal = modelUsed == AiModelUsed.LOCAL
-    val badgeBg = if (isLocal) Color(0xFF0D2818) else Color(0xFF1B1A3A)
-    val badgeBorder = if (isLocal) Color(0xFF00E676) else Color(0xFF9D4EDD)
-    val textColor = if (isLocal) Color(0xFF69F0AE) else Color(0xFFE0AAFF)
+    val isNone = modelUsed == AiModelUsed.NONE
+    val badgeBg = when { isNone -> Color(0xFF2A2A2E); isLocal -> Color(0xFF0D2818); else -> Color(0xFF1B1A3A) }
+    val badgeBorder = when { isNone -> Color(0xFF9E9E9E); isLocal -> Color(0xFF00E676); else -> Color(0xFF9D4EDD) }
+    val textColor = when { isNone -> Color(0xFFBDBDBD); isLocal -> Color(0xFF69F0AE); else -> Color(0xFFE0AAFF) }
+    val icon = when { isNone -> Icons.Default.Info; isLocal -> Icons.Default.Bolt; else -> Icons.Default.Cloud }
 
     Box(
         modifier = modifier
@@ -63,13 +65,13 @@ fun ModelBadge(
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Icon(
-                imageVector = if (isLocal) Icons.Default.Bolt else Icons.Default.Cloud,
+                imageVector = icon,
                 contentDescription = null,
                 tint = textColor,
                 modifier = Modifier.size(13.dp)
             )
             Text(
-                text = if (isLocal) "Edge Local" else "Gemini 3.8",
+                text = when { isNone -> "Not answered"; isLocal -> "On this phone"; else -> "Gemini" },
                 color = textColor,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold
@@ -98,14 +100,14 @@ fun ModelBadge(
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = if (isLocal) Icons.Default.Bolt else Icons.Default.Cloud,
+                        imageVector = icon,
                         contentDescription = null,
                         tint = textColor,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = if (isLocal) "Answered on this phone" else "Gemini 3.8 Flash Cloud",
+                        text = when { isNone -> "No answer"; isLocal -> "Answered on this phone"; else -> "Answered by Gemini (cloud)" },
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -119,10 +121,11 @@ fun ModelBadge(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = if (isLocal)
-                            "Aura's built-in offline replies. They follow simple keyword rules and are not an AI model. The note above says whether anything was sent."
-                        else
-                            "Cloud execution harnesses full frontier reasoning via Firebase AI Logic and the Gemini API.",
+                        text = when {
+                            isNone -> "No model produced this reply. It explains why your message wasn't answered."
+                            isLocal -> "Aura's built-in offline replies. They follow simple keyword rules and are not an AI model. The note above says whether anything was sent."
+                            else -> "Sent to Google's Gemini through Firebase AI Logic."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
