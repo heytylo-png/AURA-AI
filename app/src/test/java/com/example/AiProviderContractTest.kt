@@ -319,4 +319,12 @@ class AiProviderContractTest {
         assertTrue(prompt.contains("no access to the user's saved memories, goals, projects or profile"))
         assertFalse("must not claim to track goals", prompt.contains("active goals and project constraints"))
     }
+
+    @Test
+    fun cloudPromptSaysClaudeCannotTakeActions() {
+        val prompt = com.example.ai.AuraPrompt.system(com.example.data.model.AiIdentityConfig())
+        assertTrue(prompt.contains("You cannot take actions or change anything in the app"))
+        assertTrue(prompt.contains("never list \"proposed actions for approval\""))
+        assertFalse(prompt.contains("Actions only happen after the user approves them in the app"))
+    }
 }
