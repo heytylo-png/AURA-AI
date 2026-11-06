@@ -184,7 +184,7 @@ class AiProviderContractTest {
     fun cloudOnlyProviderErrorShowsTheRealErrorNotAnOfflineReply() {
         val provider = FakeProvider(stream = flow { emit(AiProviderEvent.Error("ServerException: HTTP 403 Firebase AI Logic API has not been used")) })
         val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
-        assertTrue(result.fullText.contains("Gemini couldn't answer"))
+        assertTrue(result.fullText.contains("Claude couldn't answer"))
         assertTrue(result.fullText.contains("HTTP 403"))
         assertTrue(result.reasoningRationale.contains("HTTP 403"))
         assertEquals("an error is not an answer", com.example.data.model.AiModelUsed.NONE, result.modelUsed)
@@ -203,7 +203,7 @@ class AiProviderContractTest {
         val provider = FakeProvider(stream = flow { emit(AiProviderEvent.Error("UnknownHostException")) })
         val result = completed(run(engine(provider), HybridRoutingMode.AUTO_HYBRID))
         assertEquals(com.example.data.model.AiModelUsed.LOCAL, result.modelUsed)
-        assertTrue(result.fullText.startsWith("\u26a0 Gemini is unavailable (UnknownHostException)"))
+        assertTrue(result.fullText.startsWith("\u26a0 Claude is unavailable (UnknownHostException)"))
         assertTrue(result.reasoningRationale.contains("Cloud request failed"))
     }
 
@@ -211,7 +211,7 @@ class AiProviderContractTest {
     fun partialAnswerThenFailureIsKeptAndMarkedIncomplete() {
         val provider = FakeProvider(stream = flow {
             emit(AiProviderEvent.Content("First half"))
-            emit(AiProviderEvent.Error("Gemini stopped responding for 60 seconds."))
+            emit(AiProviderEvent.Error("Claude stopped responding for 60 seconds; the reply is incomplete."))
         })
         val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
         assertEquals(com.example.data.model.AiModelUsed.CLOUD, result.modelUsed)
@@ -241,42 +241,20 @@ class AiProviderContractTest {
     }
 
     @Test
-    fun geminiFailureDescriptionKeepsTypeMessageAndCause() {
-        val e = IllegalStateException("Request failed", java.net.UnknownHostException("firebasevertexai.googleapis.com"))
-        val text = com.example.ai.CloudModelEngine.describeFailure(e)
-        assertTrue(text.contains("IllegalStateException: Request failed"))
-        assertTrue(text.contains("UnknownHostException: firebasevertexai.googleapis.com"))
-    }
-
-    @Test
-    fun appCheckRejectionExplainsHowToFixIt() {
-        val text = com.example.ai.CloudModelEngine.describeFailure(
-            IllegalStateException("Firebase App Check token is invalid.")
-        )
-        assertTrue(text.startsWith("IllegalStateException: Firebase App Check token is invalid."))
-        assertTrue(text.endsWith(com.example.ai.CloudModelEngine.APP_CHECK_HINT))
-    }
-
-    @Test
     fun answerNamesTheModelThatActuallyAnswered() {
         val provider = FakeProvider(stream = flow {
-            emit(AiProviderEvent.Completed("ok", 5, com.example.ai.CloudModelEngine.FALLBACK_LABEL))
+            emit(AiProviderEvent.Completed("ok", 5, "Claude Test Model"))
         })
         val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
         assertEquals(com.example.data.model.AiModelUsed.CLOUD, result.modelUsed)
-        assertTrue(result.reasoningRationale.startsWith("Answered by Gemini 3.5 Flash (cloud)"))
+        assertTrue(result.reasoningRationale.startsWith("Answered by Claude Test Model via your Aura relay"))
     }
 
     @Test
-    fun onlyTemporaryOverloadErrorsAreRetried() {
-        val busy = IllegalStateException(
-            "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later."
-        )
-        assertTrue(com.example.ai.CloudModelEngine.isBusy(busy))
-        assertTrue(com.example.ai.CloudModelEngine.isBusy(RuntimeException("wrapper", IllegalStateException("HTTP 503 UNAVAILABLE"))))
-        assertFalse(com.example.ai.CloudModelEngine.isBusy(IllegalStateException("Firebase App Check token is invalid.")))
-        assertFalse(com.example.ai.CloudModelEngine.isBusy(java.net.UnknownHostException("firebasevertexai.googleapis.com")))
-        assertFalse(com.example.ai.CloudModelEngine.isBusy(kotlinx.coroutines.CancellationException("high demand")))
+    fun cloudAnswerWithoutAModelNameIsLabelledClaude() {
+        val provider = FakeProvider(stream = flow { emit(AiProviderEvent.Completed("ok", 5)) })
+        val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
+        assertTrue(result.reasoningRationale.startsWith("Answered by Claude via your Aura relay"))
     }
 
 }

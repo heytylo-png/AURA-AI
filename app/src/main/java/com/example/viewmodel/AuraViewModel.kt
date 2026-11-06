@@ -7,7 +7,9 @@ import com.example.ai.HybridAiEngine
 import com.example.ai.HybridAiState
 import com.example.ai.HybridRoutingMode
 import com.example.data.local.AppDatabase
+import com.example.BuildConfig
 import com.example.actions.ActionExecutor
+import com.example.auth.FirebaseRelayAuth
 import com.example.data.model.ActionType
 import com.example.data.model.AiIdentityConfig
 import com.example.data.model.AiModelUsed
@@ -106,6 +108,30 @@ class AuraViewModel @JvmOverloads constructor(
     fun setCloudChatEnabled(enabled: Boolean) {
         privacyPrefs.edit().putBoolean("cloud_chat_enabled", enabled).apply()
         _cloudChatEnabled.value = enabled
+    }
+
+    // Claude relay access: anonymous Firebase sign-in gives this install an "access ID",
+    // which must be added to the relay's allowlist (AURA_ALLOWED_UIDS) before Claude answers.
+    private val relayAuth = FirebaseRelayAuth()
+    val relayConfigured: Boolean = BuildConfig.AURA_RELAY_URL.isNotBlank()
+    private val _relayAccessId = MutableStateFlow(relayAuth.accessId())
+    val relayAccessId: StateFlow<String?> = _relayAccessId.asStateFlow()
+    private val _relayAccessStatus = MutableStateFlow<String?>(null)
+    val relayAccessStatus: StateFlow<String?> = _relayAccessStatus.asStateFlow()
+
+    fun requestRelayAccessId() {
+        viewModelScope.launch {
+            _relayAccessStatus.value = "Signing in\u2026"
+            _relayAccessStatus.value = try {
+                relayAuth.idToken()
+                _relayAccessId.value = relayAuth.accessId()
+                null
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                e.message ?: "Sign-in failed."
+            }
+        }
     }
 
     // Identity configuration loaded from SharedPreferences to survive app restarts

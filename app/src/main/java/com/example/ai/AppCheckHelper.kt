@@ -18,7 +18,7 @@ private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_S
 private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 
 /**
- * Authoritative App Check initialization helper required for Firebase AI Logic.
+ * App Check initialization (originally for Firebase AI Logic; the Claude relay does not use it).
  * In debug builds, installs DebugAppCheckProviderFactory with a persistent debug token (created once,
  * or taken from the FIREBASE_APPCHECK_DEBUG_TOKEN intent extra).
  * In release builds, installs RecaptchaAppCheckProviderFactory using the site key resource.

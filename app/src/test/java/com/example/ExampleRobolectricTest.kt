@@ -168,8 +168,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `cloudModelEngine prompt includes user name and primary interest system block`() {
-        val engine = com.example.ai.CloudModelEngine()
+    fun `aura prompt includes user name and primary interest only when provided`() {
         val identity = AiIdentityConfig(name = "Aura", archetype = PersonalityArchetype.ANALYTICAL)
         val settings = com.example.data.model.UserSettingsEntity(
             id = 1,
@@ -177,17 +176,15 @@ class ExampleRobolectricTest {
             primaryInterest = "Autonomous Edge Computing"
         )
 
-        val prompt = engine.buildContextualPrompt(
-            userMessage = "Help me design an architecture",
-            identity = identity,
-            activeMemories = emptyList(),
-            currentProject = null,
-            userSettings = settings
-        )
+        val withProfile = com.example.ai.AuraPrompt.system(identity = identity, userSettings = settings)
+        assertTrue(withProfile.contains("User Name: HeyTyLo"))
+        assertTrue(withProfile.contains("Primary Interest: Autonomous Edge Computing"))
+        assertTrue(withProfile.contains("[USER PERSONALIZATION SETTINGS]"))
 
-        assertTrue(prompt.contains("User Name: HeyTyLo"))
-        assertTrue(prompt.contains("Primary Interest: Autonomous Edge Computing"))
-        assertTrue(prompt.contains("[USER PERSONALIZATION SETTINGS]"))
+        val withoutProfile = com.example.ai.AuraPrompt.system(identity = identity)
+        assertTrue(withoutProfile.startsWith("You are Aura"))
+        assertTrue(!withoutProfile.contains("HeyTyLo"))
+        assertTrue(!withoutProfile.contains("[USER PERSONALIZATION SETTINGS]"))
     }
 
     @Test

@@ -834,7 +834,7 @@ fun EmptyChatWelcome(
         Spacer(Modifier.height(16.dp))
 
         Text(
-            text = "Autonomous execution bound by your approval. Uses fast on-device local models for instant offline work, and Gemini 3.8 Flash for high-level reasoning.",
+            text = "Autonomous execution bound by your approval. Uses built-in offline replies for simple commands, and Claude for real conversations when cloud chat is on.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center

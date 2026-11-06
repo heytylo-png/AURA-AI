@@ -20,6 +20,14 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Address of the Claude relay (relay/ in this repo). Supplied by CI from the AURA_RELAY_URL
+    // secret; empty in local and PR builds, where the app reports that Claude isn't set up.
+    val relayUrl = (System.getenv("AURA_RELAY_URL") ?: "").trim()
+    require(relayUrl.isEmpty() || relayUrl.matches(Regex("https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?"))) {
+      "AURA_RELAY_URL must be an https:// URL"
+    }
+    buildConfigField("String", "AURA_RELAY_URL", "\"$relayUrl\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -117,13 +125,13 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   // implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
-  implementation(libs.firebase.ai)
+  // Gemini (firebase-ai) was replaced by Claude via the Aura relay.
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)
 
   // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
   // Sign-In via Credential Manager:
-  // implementation(libs.firebase.auth)
+  implementation(libs.firebase.auth) // anonymous sign-in for the Claude relay
   // implementation(libs.androidx.credentials)
   // implementation(libs.androidx.credentials.play.services)
   // implementation(libs.googleid)
@@ -142,6 +150,7 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation(libs.okhttp.mockwebserver)
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.espresso.core)
