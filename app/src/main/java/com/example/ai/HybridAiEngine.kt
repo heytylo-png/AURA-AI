@@ -175,7 +175,7 @@ class HybridAiEngine(
                         fullText = done.fullText,
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
-                        reasoningRationale = "Answered by Gemini 3.8 Flash (cloud). Only this message was sent; no memories, projects or profile.",
+                        reasoningRationale = "Answered by ${done.modelName ?: "Gemini"} (cloud). Only this message was sent; no memories, projects or profile.",
                         proposedAction = localScan.proposedAction
                     )
                 )
@@ -218,7 +218,7 @@ class HybridAiEngine(
     /** A status message from Aura itself, not an AI answer. */
     private fun notice(text: String, rationale: String) = HybridAiState.Completed(
         fullText = text,
-        modelUsed = AiModelUsed.LOCAL,
+        modelUsed = AiModelUsed.NONE,
         latencyMs = 0L,
         reasoningRationale = rationale,
         proposedAction = null

@@ -9,12 +9,14 @@ import com.google.firebase.ai.ai
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.timeout
 import kotlin.time.Duration.Companion.seconds
 import com.example.data.model.UserSettingsEntity
@@ -23,7 +25,7 @@ private const val TAG = "CloudModelEngine"
 
 sealed interface CloudAiStreamChunk {
     data class Content(val text: String) : CloudAiStreamChunk
-    data class Completed(val fullText: String, val latencyMs: Long) : CloudAiStreamChunk
+    data class Completed(val fullText: String, val latencyMs: Long, val modelName: String) : CloudAiStreamChunk
     data class Error(val message: String) : CloudAiStreamChunk
 }
 
@@ -39,7 +41,10 @@ class CloudModelEngine : AiProvider {
 
     // Lazy initialization prevents early startup crashes.
     private val model by lazy {
-        Firebase.ai.generativeModel("gemini-3.8-flash")
+        Firebase.ai.generativeModel(PRIMARY_MODEL)
+    }
+    private val fallbackModel by lazy {
+        Firebase.ai.generativeModel(FALLBACK_MODEL)
     }
 
     override fun generateStream(request: AiProviderRequest): Flow<AiProviderEvent> = flow {
@@ -57,7 +62,7 @@ class CloudModelEngine : AiProvider {
         ).collect { chunk ->
             when (chunk) {
                 is CloudAiStreamChunk.Content -> emit(AiProviderEvent.Content(chunk.text))
-                is CloudAiStreamChunk.Completed -> emit(AiProviderEvent.Completed(chunk.fullText, chunk.latencyMs))
+                is CloudAiStreamChunk.Completed -> emit(AiProviderEvent.Completed(chunk.fullText, chunk.latencyMs, chunk.modelName))
                 is CloudAiStreamChunk.Error -> emit(AiProviderEvent.Error(chunk.message))
             }
         }
@@ -116,12 +121,29 @@ User Query: $userMessage
         val fullPrompt = buildContextualPrompt(prompt, identity, activeMemories, currentProject, userSettings)
         val startTime = System.currentTimeMillis()
         val accumulatedText = StringBuilder()
+        var attempt = 0
+        var usedFallback = false
 
         // Built from operators rather than try/catch around emit(), so exceptions thrown by the
         // collector are never caught here (Kotlin flow exception transparency; audit FB-07).
-        return flow { emitAll(model.generateContentStream(fullPrompt)) } // model is created lazily inside the flow
+        return flow {
+            // Models are created lazily inside the flow. The last attempt uses the fallback model.
+            usedFallback = attempt >= RETRY_DELAYS.size
+            emitAll((if (usedFallback) fallbackModel else model).generateContentStream(fullPrompt))
+        }
             // No limit on the whole answer: only fail if Gemini goes silent between chunks.
             .timeout(IDLE_TIMEOUT)
+            // "High demand" errors are usually brief. Retry only before any text has arrived,
+            // so an answer is never repeated: twice on the main model, then once on the fallback.
+            .retryWhen { cause, n ->
+                val retry = accumulatedText.isEmpty() && n < RETRY_DELAYS.size && isBusy(cause)
+                if (retry) {
+                    Log.w(TAG, "Gemini busy (attempt ${n + 1}), retrying", cause)
+                    delay(RETRY_DELAYS[n.toInt()])
+                    attempt = n.toInt() + 1
+                }
+                retry
+            }
             .mapNotNull { chunk ->
                 chunk.text?.takeIf { it.isNotEmpty() }?.let {
                     accumulatedText.append(it)
@@ -133,7 +155,11 @@ User Query: $userMessage
                     val finalOutput = accumulatedText.toString()
                     emit(
                         if (finalOutput.isNotBlank()) {
-                            CloudAiStreamChunk.Completed(finalOutput, System.currentTimeMillis() - startTime)
+                            CloudAiStreamChunk.Completed(
+                                finalOutput,
+                                System.currentTimeMillis() - startTime,
+                                if (usedFallback) FALLBACK_LABEL else PRIMARY_LABEL
+                            )
                         } else {
                             CloudAiStreamChunk.Error("Gemini returned an empty response.")
                         }
@@ -154,6 +180,26 @@ User Query: $userMessage
 
     companion object {
         private val IDLE_TIMEOUT = 60.seconds
+
+        const val PRIMARY_MODEL = "gemini-3.8-flash"
+        const val PRIMARY_LABEL = "Gemini 3.8 Flash"
+        // Stable model used once when the main model stays overloaded.
+        const val FALLBACK_MODEL = "gemini-3.5-flash"
+        const val FALLBACK_LABEL = "Gemini 3.5 Flash"
+        private val RETRY_DELAYS = listOf(2_000L, 5_000L)
+
+        /** Temporary overload/rate errors worth retrying. Setup errors (App Check, bad model) are not. */
+        fun isBusy(e: Throwable): Boolean {
+            if (e is CancellationException) return false
+            val text = generateSequence(e) { it.cause }.take(4)
+                .joinToString(" ") { "${it.javaClass.simpleName} ${it.message.orEmpty()}" }
+                .lowercase()
+            return BUSY_MARKERS.any { it in text }
+        }
+
+        private val BUSY_MARKERS = listOf(
+            "high demand", "overloaded", "unavailable", "503", "try again later", "resource exhausted", "resource_exhausted"
+        )
 
         /** A readable description that keeps the exception type and its causes, for diagnosing setup problems. */
         fun describeFailure(e: Throwable): String {

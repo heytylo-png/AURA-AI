@@ -396,7 +396,7 @@ class AuraViewModel @JvmOverloads constructor(
                         val errorMsg = ChatMessageEntity(
                             sender = Sender.AI,
                             text = "Error: ${state.message}",
-                            modelUsed = AiModelUsed.LOCAL,
+                            modelUsed = AiModelUsed.NONE,
                             reasoningExplanation = "Model execution encountered an error.",
                             associatedProjectId = currentProj?.id,
                             sessionId = currentSessionId

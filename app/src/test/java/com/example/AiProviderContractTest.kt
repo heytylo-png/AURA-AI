@@ -169,6 +169,7 @@ class AiProviderContractTest {
         val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD, allowCloud = false))
         assertNull("nothing may be sent", provider.receivedRequest)
         assertTrue(result.fullText.contains("cloud chat is off"))
+        assertEquals(com.example.data.model.AiModelUsed.NONE, result.modelUsed)
     }
 
     @Test
@@ -186,6 +187,7 @@ class AiProviderContractTest {
         assertTrue(result.fullText.contains("Gemini couldn't answer"))
         assertTrue(result.fullText.contains("HTTP 403"))
         assertTrue(result.reasoningRationale.contains("HTTP 403"))
+        assertEquals("an error is not an answer", com.example.data.model.AiModelUsed.NONE, result.modelUsed)
         assertNull(result.proposedAction)
     }
 
@@ -253,6 +255,28 @@ class AiProviderContractTest {
         )
         assertTrue(text.startsWith("IllegalStateException: Firebase App Check token is invalid."))
         assertTrue(text.endsWith(com.example.ai.CloudModelEngine.APP_CHECK_HINT))
+    }
+
+    @Test
+    fun answerNamesTheModelThatActuallyAnswered() {
+        val provider = FakeProvider(stream = flow {
+            emit(AiProviderEvent.Completed("ok", 5, com.example.ai.CloudModelEngine.FALLBACK_LABEL))
+        })
+        val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
+        assertEquals(com.example.data.model.AiModelUsed.CLOUD, result.modelUsed)
+        assertTrue(result.reasoningRationale.startsWith("Answered by Gemini 3.5 Flash (cloud)"))
+    }
+
+    @Test
+    fun onlyTemporaryOverloadErrorsAreRetried() {
+        val busy = IllegalStateException(
+            "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later."
+        )
+        assertTrue(com.example.ai.CloudModelEngine.isBusy(busy))
+        assertTrue(com.example.ai.CloudModelEngine.isBusy(RuntimeException("wrapper", IllegalStateException("HTTP 503 UNAVAILABLE"))))
+        assertFalse(com.example.ai.CloudModelEngine.isBusy(IllegalStateException("Firebase App Check token is invalid.")))
+        assertFalse(com.example.ai.CloudModelEngine.isBusy(java.net.UnknownHostException("firebasevertexai.googleapis.com")))
+        assertFalse(com.example.ai.CloudModelEngine.isBusy(kotlinx.coroutines.CancellationException("high demand")))
     }
 
 }
