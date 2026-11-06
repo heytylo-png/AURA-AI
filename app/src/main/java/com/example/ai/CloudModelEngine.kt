@@ -7,10 +7,16 @@ import com.example.data.model.ProjectEntity
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.timeout
+import kotlin.time.Duration.Companion.seconds
 import com.example.data.model.UserSettingsEntity
 
 private const val TAG = "CloudModelEngine"
@@ -99,42 +105,63 @@ User Query: $userMessage
 """.trimIndent()
     }
 
+    @OptIn(FlowPreview::class)
     fun generateContentStream(
         prompt: String,
         identity: AiIdentityConfig,
         activeMemories: List<MemoryEntity>,
         currentProject: ProjectEntity?,
         userSettings: UserSettingsEntity? = null
-    ): Flow<CloudAiStreamChunk> = flow {
+    ): Flow<CloudAiStreamChunk> {
         val fullPrompt = buildContextualPrompt(prompt, identity, activeMemories, currentProject, userSettings)
         val startTime = System.currentTimeMillis()
         val accumulatedText = StringBuilder()
 
-        try {
-            withTimeout(8_000L) {
-                model.generateContentStream(fullPrompt).collect { chunk ->
-                    val chunkText = chunk.text.orEmpty()
-                    if (chunkText.isNotEmpty()) {
-                        accumulatedText.append(chunkText)
-                        emit(CloudAiStreamChunk.Content(accumulatedText.toString()))
-                    }
+        // Built from operators rather than try/catch around emit(), so exceptions thrown by the
+        // collector are never caught here (Kotlin flow exception transparency; audit FB-07).
+        return flow { emitAll(model.generateContentStream(fullPrompt)) } // model is created lazily inside the flow
+            // No limit on the whole answer: only fail if Gemini goes silent between chunks.
+            .timeout(IDLE_TIMEOUT)
+            .mapNotNull { chunk ->
+                chunk.text?.takeIf { it.isNotEmpty() }?.let {
+                    accumulatedText.append(it)
+                    CloudAiStreamChunk.Content(accumulatedText.toString()) as CloudAiStreamChunk
                 }
             }
-
-            val finalOutput = accumulatedText.toString()
-            if (finalOutput.isNotBlank()) {
-                emit(CloudAiStreamChunk.Completed(finalOutput, System.currentTimeMillis() - startTime))
-            } else {
-                emit(CloudAiStreamChunk.Error("Gemini 3.8 Flash returned an empty response."))
+            .onCompletion { cause ->
+                if (cause == null) {
+                    val finalOutput = accumulatedText.toString()
+                    emit(
+                        if (finalOutput.isNotBlank()) {
+                            CloudAiStreamChunk.Completed(finalOutput, System.currentTimeMillis() - startTime)
+                        } else {
+                            CloudAiStreamChunk.Error("Gemini returned an empty response.")
+                        }
+                    )
+                }
             }
-        } catch (e: TimeoutCancellationException) {
-            Log.w(TAG, "Cloud generation timed out after 8s.")
-            emit(CloudAiStreamChunk.Error("Cloud connection timed out after 8s."))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(TAG, "Firebase AI generation error: ${e.message}")
-            emit(CloudAiStreamChunk.Error(e.localizedMessage ?: "Cloud AI model failed to connect."))
+            .catch { e ->
+                if (e is TimeoutCancellationException) {
+                    Log.w(TAG, "Gemini went silent for ${IDLE_TIMEOUT.inWholeSeconds}s.")
+                    emit(CloudAiStreamChunk.Error("Gemini stopped responding for ${IDLE_TIMEOUT.inWholeSeconds} seconds."))
+                } else {
+                    if (e is CancellationException) throw e
+                    Log.w(TAG, "Gemini request failed", e)
+                    emit(CloudAiStreamChunk.Error(describeFailure(e)))
+                }
+            }
+    }
+
+    companion object {
+        private val IDLE_TIMEOUT = 60.seconds
+
+        /** A readable description that keeps the exception type and its causes, for diagnosing setup problems. */
+        fun describeFailure(e: Throwable): String {
+            val parts = generateSequence(e) { it.cause }.take(4)
+                .map { t -> "${t.javaClass.simpleName}${t.message?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""}" }
+                .distinct()
+                .toList()
+            return parts.joinToString(" \u2190 ").take(500)
         }
     }
 }

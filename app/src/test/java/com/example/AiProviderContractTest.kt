@@ -144,4 +144,106 @@ class AiProviderContractTest {
         assertEquals(listOf(HybridAiState.Starting), emittedStates)
     }
 
+    // ---- Routing must never pass off a canned reply or a failure as a normal answer ----
+
+    private fun engine(provider: AiProvider, online: Boolean = true) =
+        HybridAiEngine(context = testContext(), cloudEngine = provider, onlineStatusOverride = { online })
+
+    private fun run(engine: HybridAiEngine, mode: HybridRoutingMode, allowCloud: Boolean = true, prompt: String = "Please analyze this complex topic in detail") =
+        runBlocking {
+            engine.processHybridRequest(
+                prompt = prompt,
+                mode = mode,
+                identity = com.example.data.model.AiIdentityConfig(),
+                activeMemories = emptyList(),
+                projects = emptyList(),
+                allowCloudRequest = allowCloud
+            ).toList()
+        }
+
+    private fun completed(states: List<HybridAiState>) = states.last() as HybridAiState.Completed
+
+    @Test
+    fun cloudOnlyWithCloudChatOffSendsNothingAndSaysWhy() {
+        val provider = FakeProvider()
+        val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD, allowCloud = false))
+        assertNull("nothing may be sent", provider.receivedRequest)
+        assertTrue(result.fullText.contains("cloud chat is off"))
+    }
+
+    @Test
+    fun cloudOnlyOfflineSaysOfflineInsteadOfACannedReply() {
+        val provider = FakeProvider()
+        val result = completed(run(engine(provider, online = false), HybridRoutingMode.FORCE_CLOUD))
+        assertNull(provider.receivedRequest)
+        assertTrue(result.fullText.contains("offline"))
+    }
+
+    @Test
+    fun cloudOnlyProviderErrorShowsTheRealErrorNotAnOfflineReply() {
+        val provider = FakeProvider(stream = flow { emit(AiProviderEvent.Error("ServerException: HTTP 403 Firebase AI Logic API has not been used")) })
+        val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
+        assertTrue(result.fullText.contains("Gemini couldn't answer"))
+        assertTrue(result.fullText.contains("HTTP 403"))
+        assertTrue(result.reasoningRationale.contains("HTTP 403"))
+        assertNull(result.proposedAction)
+    }
+
+    @Test
+    fun cloudOnlyProviderExceptionIsReportedNotSwallowed() {
+        val provider = FakeProvider(stream = flow { throw IllegalStateException("boom") })
+        val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
+        assertTrue(result.fullText.contains("boom"))
+    }
+
+    @Test
+    fun autoModeFallbackIsLabelledAsAFallback() {
+        val provider = FakeProvider(stream = flow { emit(AiProviderEvent.Error("UnknownHostException")) })
+        val result = completed(run(engine(provider), HybridRoutingMode.AUTO_HYBRID))
+        assertEquals(com.example.data.model.AiModelUsed.LOCAL, result.modelUsed)
+        assertTrue(result.fullText.startsWith("\u26a0 Gemini is unavailable (UnknownHostException)"))
+        assertTrue(result.reasoningRationale.contains("Cloud request failed"))
+    }
+
+    @Test
+    fun partialAnswerThenFailureIsKeptAndMarkedIncomplete() {
+        val provider = FakeProvider(stream = flow {
+            emit(AiProviderEvent.Content("First half"))
+            emit(AiProviderEvent.Error("Gemini stopped responding for 60 seconds."))
+        })
+        val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
+        assertEquals(com.example.data.model.AiModelUsed.CLOUD, result.modelUsed)
+        assertTrue(result.fullText.startsWith("First half"))
+        assertTrue(result.fullText.contains("incomplete"))
+    }
+
+    @Test
+    fun longAnswersAreNotCutOffByATimer() {
+        val provider = FakeProvider(stream = flow {
+            emit(AiProviderEvent.Content("a"))
+            kotlinx.coroutines.delay(9_000) // longer than the old 8-second whole-answer limit
+            emit(AiProviderEvent.Completed("a full answer", 9_000))
+        })
+        val result = completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
+        assertEquals("a full answer", result.fullText)
+    }
+
+    @Test
+    fun greetingRouteUsesWholeWordsOnly() {
+        val e = engine(FakeProvider())
+        assertTrue(e.shouldRouteToLocal("hi"))
+        assertTrue(e.shouldRouteToLocal("hello there"))
+        assertFalse(e.shouldRouteToLocal("Explain this theorem"))
+        assertFalse(e.shouldRouteToLocal("Which one wins?"))
+        assertFalse(e.shouldRouteToLocal("I think so"))
+    }
+
+    @Test
+    fun geminiFailureDescriptionKeepsTypeMessageAndCause() {
+        val e = IllegalStateException("Request failed", java.net.UnknownHostException("firebasevertexai.googleapis.com"))
+        val text = com.example.ai.CloudModelEngine.describeFailure(e)
+        assertTrue(text.contains("IllegalStateException: Request failed"))
+        assertTrue(text.contains("UnknownHostException: firebasevertexai.googleapis.com"))
+    }
+
 }

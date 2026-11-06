@@ -105,7 +105,7 @@ fun ModelBadge(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = if (isLocal) "Local Offline Reasoning" else "Gemini 3.8 Flash Cloud",
+                        text = if (isLocal) "Answered on this phone" else "Gemini 3.8 Flash Cloud",
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -120,7 +120,7 @@ fun ModelBadge(
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = if (isLocal)
-                            "Local execution guarantees zero data egress, instant response, and uninterrupted offline availability."
+                            "Aura's built-in offline replies. They follow simple keyword rules and are not an AI model. The note above says whether anything was sent."
                         else
                             "Cloud execution harnesses full frontier reasoning via Firebase AI Logic and the Gemini API.",
                         style = MaterialTheme.typography.bodySmall,
