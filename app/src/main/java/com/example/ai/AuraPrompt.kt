@@ -29,6 +29,13 @@ object AuraPrompt {
                 "Actions only happen after the user approves them in the app."
         )
 
+        if (activeMemories.isEmpty() && currentProject == null && userSettings == null) {
+            appendLine(
+                "You can see only this conversation. You have no access to the user's saved memories, " +
+                    "goals, projects or profile, so never claim to remember or track them."
+            )
+        }
+
         if (userSettings != null && (userSettings.userName.isNotBlank() || userSettings.primaryInterest.isNotBlank())) {
             appendLine()
             appendLine("[USER PERSONALIZATION SETTINGS]")

@@ -74,6 +74,9 @@ internal fun AiIdentityConfig.forCloud(): AiIdentityConfig {
     return defaults.copy(
         name = cleanName.ifBlank { defaults.name },
         archetype = archetype,
-        responseLength = responseLength
+        responseLength = responseLength,
+        // The default directive talks about "active goals and project constraints", which the
+        // cloud never receives; sending it made Claude claim context it does not have.
+        customDirectives = ""
     )
 }

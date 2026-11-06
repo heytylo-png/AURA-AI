@@ -276,7 +276,7 @@ class AiProviderContractTest {
         assertEquals(com.example.data.model.PersonalityArchetype.CREATIVE_STRATEGIST, sent.archetype)
         assertEquals(identity.responseLength, sent.responseLength)
         assertEquals(defaults.coreValues, sent.coreValues)
-        assertEquals(defaults.customDirectives, sent.customDirectives)
+        assertEquals("", sent.customDirectives)
     }
 
     @Test
@@ -308,5 +308,15 @@ class AiProviderContractTest {
         }
         assertEquals(history, requireNotNull(provider.receivedRequest).history)
         assertTrue(completed(result).reasoningRationale.contains("last 1 earlier Claude exchange in this chat"))
+    }
+
+    @Test
+    fun cloudPromptSaysWhatClaudeCannotSee() {
+        val identity = com.example.data.model.AiIdentityConfig()
+        val prompt = com.example.ai.AuraPrompt.system(
+            AiProviderRequest(prompt = "Hi", identity = identity).withoutPersonalContext().identity
+        )
+        assertTrue(prompt.contains("no access to the user's saved memories, goals, projects or profile"))
+        assertFalse("must not claim to track goals", prompt.contains("active goals and project constraints"))
     }
 }
