@@ -331,6 +331,44 @@ fun SettingsScreen(
                 }
             }
 
+            // Test builds only: the App Check debug token that must be registered in Firebase
+            // before Gemini accepts requests from this phone.
+            val appContext = androidx.compose.ui.platform.LocalContext.current
+            val appCheckToken = remember { com.example.ai.appCheckDebugToken(appContext) }
+            if (appCheckToken != null) {
+                val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                var copied by remember { mutableStateOf(false) }
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Gemini setup (test build)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "Add this token once in the Firebase console: App Check \u2192 Apps \u2192 your Android app \u2192 Manage debug tokens. Treat it like a password and don't share it.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = appCheckToken,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            modifier = Modifier.testTag("app_check_debug_token")
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        androidx.compose.material3.OutlinedButton(onClick = {
+                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(appCheckToken))
+                            copied = true
+                        }) {
+                            Text(if (copied) "Copied" else "Copy token")
+                        }
+                    }
+                }
+            }
+
             // Save Confirmation Banner
             AnimatedVisibility(
                 visible = showSavedBanner,
