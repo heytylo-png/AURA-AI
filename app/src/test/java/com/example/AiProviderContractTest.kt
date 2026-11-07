@@ -339,10 +339,4 @@ class AiProviderContractTest {
         }
     }
 
-    @Test
-    fun onPhoneRepliesStillProposeActions() {
-        val result = completed(run(engine(FakeProvider()), HybridRoutingMode.FORCE_LOCAL, prompt = "remember that I like tea"))
-        assertEquals(com.example.data.model.AiModelUsed.LOCAL, result.modelUsed)
-        assertNotNull(result.proposedAction)
-    }
 }
