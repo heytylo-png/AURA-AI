@@ -54,3 +54,16 @@ fun AuraTheme(
         content = content
     )
 }
+
+/** Switches readable on graphite: white track with a dark knob when on, gray knob and outline when off. */
+@Composable
+fun auraSwitchColors(): androidx.compose.material3.SwitchColors = androidx.compose.material3.SwitchDefaults.colors(
+    checkedThumbColor = Graphite,
+    checkedTrackColor = TextPrimary,
+    checkedBorderColor = TextPrimary,
+    checkedIconColor = TextPrimary,
+    uncheckedThumbColor = TextMuted,
+    uncheckedTrackColor = GraphiteHigh,
+    uncheckedBorderColor = TextMuted,
+    uncheckedIconColor = GraphiteHigh
+)

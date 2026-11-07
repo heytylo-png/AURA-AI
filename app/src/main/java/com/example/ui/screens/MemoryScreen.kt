@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.theme.auraSwitchColors
 import com.example.ui.theme.auraBackground
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -369,10 +370,8 @@ fun MemoryItemCard(
                     Switch(
                         checked = memory.isActive,
                         onCheckedChange = { onToggleActive() },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = MaterialTheme.colorScheme.primary
-                        ),
-                        modifier = Modifier.size(36.dp).testTag("toggle_memory_${memory.id}")
+                        colors = auraSwitchColors(),
+                        modifier = Modifier.testTag("toggle_memory_${memory.id}")
                     )
 
                     Spacer(Modifier.width(4.dp))
@@ -428,11 +427,7 @@ fun MemoryItemCard(
                     onClick = onToggleShare,
                     label = {
                         Text(
-                            when {
-                                !memory.shareWithCloud -> "Share with Claude"
-                                sharingOn && memory.isActive -> "Shared with Claude"
-                                else -> "Marked to share"
-                            },
+                            memoryShareLabel(memory.shareWithCloud, memory.isActive, sharingOn),
                             style = MaterialTheme.typography.labelSmall
                         )
                     },
@@ -525,4 +520,12 @@ fun AddMemoryDialog(
             }
         }
     )
+}
+
+/** What the share chip says, including why a marked memory isn't being sent right now. */
+fun memoryShareLabel(marked: Boolean, active: Boolean, sharingOn: Boolean): String = when {
+    !marked -> "Share with Claude"
+    !active -> "Marked · memory is off"
+    !sharingOn -> "Marked · sharing is off in Settings"
+    else -> "Shared with Claude"
 }
