@@ -5,6 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
 import com.example.data.model.ChatMessageEntity
 import com.example.data.model.ChatSessionEntity
 import com.example.data.model.MemoryEntity
@@ -13,6 +14,14 @@ import com.example.data.model.ProjectArtifactEntity
 import com.example.data.model.ProjectEntity
 import com.example.data.model.TaskActionEntity
 import com.example.data.model.UserSettingsEntity
+
+/**
+ * Current schema version. Raising it REQUIRES, in the same change:
+ *  1. a Migration from the previous version added to [AppDatabase.MIGRATIONS],
+ *  2. the new schema file committed under app/schemas/ (written by the build),
+ * DatabaseUpgradeTest fails until both exist.
+ */
+const val DATABASE_VERSION = 4
 
 @Database(
     entities = [
@@ -25,7 +34,7 @@ import com.example.data.model.UserSettingsEntity
         ChatSessionEntity::class,
         UserSettingsEntity::class
     ],
-    version = 4,
+    version = DATABASE_VERSION,
     // Room writes the schema of every version to app/schemas/ (committed to git), so
     // future migrations can be written and tested against the exact previous schema.
     exportSchema = true
@@ -66,6 +75,12 @@ abstract class AppDatabase : RoomDatabase() {
     companion object {
         const val DATABASE_NAME = "aura_ai_database"
 
+        /** Oldest version whose schema is in app/schemas/; upgrades are guaranteed from here on. */
+        const val OLDEST_SUPPORTED_VERSION = 4
+
+        /** Every schema upgrade, in order. Empty while the app is still on its first exported version. */
+        val MIGRATIONS: Array<Migration> = arrayOf()
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -79,12 +94,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        private fun buildDatabase(appContext: Context): AppDatabase {
+        private fun buildDatabase(appContext: Context): AppDatabase = build(appContext, DATABASE_NAME)
+
+        /** The production configuration; also used by DatabaseUpgradeTest on a copy of old data. */
+        internal fun build(appContext: Context, name: String): AppDatabase {
             return Room.databaseBuilder(
                 appContext,
                 AppDatabase::class.java,
-                DATABASE_NAME
+                name
             )
+                .addMigrations(*MIGRATIONS)
                 // No destructive fallback: a schema change without a matching Migration must
                 // fail loudly instead of silently deleting the user's memories, chats and projects.
                 // Every version bump needs .addMigrations(MIGRATION_x_y) and a migration test.
