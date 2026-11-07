@@ -128,10 +128,9 @@ fun DashboardScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
+            // Voice fills the box; the user reviews it and taps send (audit SEC-13).
             viewModel.voiceManager.startListening { spoken ->
                 quickPromptText = spoken
-                viewModel.sendMessage(spoken)
-                onNavigateToChat()
             }
         }
     }
@@ -190,9 +189,9 @@ fun DashboardScreen(
                                         Manifest.permission.RECORD_AUDIO
                                     ) == PackageManager.PERMISSION_GRANTED
                                     if (hasPermission) {
+                                        // Voice fills the box; nothing is sent until the user taps send.
                                         viewModel.voiceManager.startListening { spoken ->
-                                            viewModel.sendMessage(spoken)
-                                            onNavigateToChat()
+                                            quickPromptText = spoken
                                         }
                                     } else {
                                         audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
