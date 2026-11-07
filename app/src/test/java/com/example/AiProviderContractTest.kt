@@ -7,6 +7,7 @@ import com.example.ai.AiProviderRequest
 import com.example.ai.HybridAiEngine
 import com.example.ai.HybridAiState
 import com.example.ai.HybridRoutingMode
+import com.example.ai.forCloud
 import com.example.ai.withoutPersonalContext
 import com.example.data.model.MemoryCategory
 import com.example.data.model.MemoryEntity
@@ -339,4 +340,77 @@ class AiProviderContractTest {
         }
     }
 
+    // ---- Personal details: only with the sharing switch, only what the user marked ----
+
+    private fun mem(id: Long, text: String, share: Boolean, active: Boolean = true) = com.example.data.model.MemoryEntity(
+        id = id, content = text, category = com.example.data.model.MemoryCategory.FACT, isActive = active, shareWithCloud = share
+    )
+
+    private val personalRequest = AiProviderRequest(
+        prompt = "Hi",
+        identity = com.example.data.model.AiIdentityConfig(customDirectives = "private directive"),
+        activeMemories = listOf(mem(1, "shared fact", true), mem(2, "private fact", false), mem(3, "switched off", true, active = false)),
+        currentProject = com.example.data.model.ProjectEntity(title = "Secret project", description = "x"),
+        userSettings = com.example.data.model.UserSettingsEntity(id = 1, userName = "Ty", primaryInterest = "Robots")
+    )
+
+    @Test
+    fun withoutTheSwitchNothingPersonalIsSent() {
+        val sent = personalRequest.forCloud(sharePersonalContext = false)
+        assertTrue(sent.activeMemories.isEmpty())
+        assertNull(sent.userSettings)
+        assertNull(sent.currentProject)
+        assertFalse(sent.allowPersonalContext)
+    }
+
+    @Test
+    fun withTheSwitchOnlyMarkedActiveMemoriesAndProfileAreSent() {
+        val sent = personalRequest.forCloud(sharePersonalContext = true)
+        assertEquals(listOf("shared fact"), sent.activeMemories.map { it.content })
+        assertEquals("Ty", sent.userSettings?.userName)
+        assertNull("projects never go", sent.currentProject)
+        assertEquals("", sent.identity.customDirectives)
+        assertTrue(sent.allowPersonalContext)
+    }
+
+    @Test
+    fun sharedMemoriesAreCappedAndEmptyProfileIsNotSent() {
+        val many = personalRequest.copy(
+            activeMemories = (1L..20L).map { mem(it, "m$it", true) },
+            userSettings = com.example.data.model.UserSettingsEntity(id = 1)
+        ).forCloud(sharePersonalContext = true)
+        assertEquals(12, many.activeMemories.size)
+        assertNull(many.userSettings)
+    }
+
+    @Test
+    fun routerSendsSharedDetailsAndSaysSo() {
+        val provider = FakeProvider()
+        val result = runBlocking {
+            engine(provider).processHybridRequest(
+                prompt = "Please analyze this complex topic in detail",
+                mode = HybridRoutingMode.FORCE_CLOUD,
+                identity = com.example.data.model.AiIdentityConfig(),
+                activeMemories = personalRequest.activeMemories,
+                projects = emptyList(),
+                userSettings = personalRequest.userSettings,
+                allowCloudRequest = true,
+                sharePersonalContext = true
+            ).toList()
+        }
+        assertEquals(listOf("shared fact"), requireNotNull(provider.receivedRequest).activeMemories.map { it.content })
+        val rationale = completed(result).reasoningRationale
+        assertTrue(rationale, rationale.contains("1 memory you marked to share"))
+        assertTrue(rationale, rationale.contains("your name and main interest"))
+    }
+
+    @Test
+    fun promptExplainsWhatClaudeCanSeeWhenDetailsAreShared() {
+        val sent = personalRequest.forCloud(sharePersonalContext = true)
+        val prompt = com.example.ai.AuraPrompt.system(sent.identity, sent.activeMemories, sent.currentProject, sent.userSettings)
+        assertTrue(prompt.contains("only the personal details listed below"))
+        assertTrue(prompt.contains("shared fact"))
+        assertFalse(prompt.contains("private fact"))
+        assertFalse(prompt.contains("Secret project"))
+    }
 }

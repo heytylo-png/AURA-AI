@@ -80,3 +80,23 @@ internal fun AiIdentityConfig.forCloud(): AiIdentityConfig {
         customDirectives = ""
     )
 }
+
+/** Most memories sent to the cloud in one request. */
+internal const val MAX_CLOUD_MEMORIES = 12
+
+/**
+ * What may leave the phone with a cloud request.
+ *
+ * Without the user's sharing switch: nothing personal (see [withoutPersonalContext]).
+ * With it: the user's name and main interest, and only the active memories the user marked
+ * "Share with Claude" (at most [MAX_CLOUD_MEMORIES]). Projects, custom directives and core values
+ * never go, and memories not marked stay on the phone.
+ */
+internal fun AiProviderRequest.forCloud(sharePersonalContext: Boolean): AiProviderRequest {
+    if (!sharePersonalContext) return withoutPersonalContext()
+    return withoutPersonalContext().copy(
+        activeMemories = activeMemories.filter { it.isActive && it.shareWithCloud }.take(MAX_CLOUD_MEMORIES),
+        userSettings = userSettings?.takeIf { it.userName.isNotBlank() || it.primaryInterest.isNotBlank() },
+        allowPersonalContext = true
+    )
+}

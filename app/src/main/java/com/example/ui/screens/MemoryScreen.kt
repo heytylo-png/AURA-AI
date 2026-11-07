@@ -61,6 +61,8 @@ import com.example.data.model.MemoryCategory
 import com.example.data.model.MemoryEntity
 import com.example.data.model.sourceLabel
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudDone
 import com.example.viewmodel.AuraViewModel
 
 @Composable
@@ -68,6 +70,7 @@ fun MemoryScreen(viewModel: AuraViewModel) {
     val memories by viewModel.filteredMemories.collectAsState()
     val allMemories by viewModel.allMemories.collectAsState()
     val searchQuery by viewModel.memorySearchQuery.collectAsState()
+    val sharingOn by viewModel.sharePersonalContext.collectAsState()
     val selectedCategory by viewModel.selectedMemoryCategory.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
@@ -203,7 +206,9 @@ fun MemoryScreen(viewModel: AuraViewModel) {
                             memory = memory,
                             onToggleActive = { viewModel.toggleMemoryActive(memory) },
                             onDelete = { memoryPendingDelete = memory },
-                            onEdit = { memoryBeingEdited = memory }
+                            onEdit = { memoryBeingEdited = memory },
+                            onToggleShare = { viewModel.toggleMemoryShare(memory) },
+                            sharingOn = sharingOn
                         )
                     }
                 }
@@ -305,7 +310,10 @@ fun MemoryItemCard(
     memory: MemoryEntity,
     onToggleActive: () -> Unit,
     onDelete: () -> Unit,
-    onEdit: () -> Unit = {}
+    onEdit: () -> Unit = {},
+    onToggleShare: () -> Unit = {},
+    /** The Settings sharing switch; marked memories are only sent while it's on. */
+    sharingOn: Boolean = false
 ) {
     Card(
         modifier = Modifier
@@ -402,13 +410,42 @@ fun MemoryItemCard(
 
             Spacer(Modifier.height(6.dp))
 
-            // Where this memory came from, so the user can judge it (and spot old demo data).
-            Text(
-                text = memory.sourceLabel + (memory.updatedAt?.let { " · edited " + formatMemoryDate(it) } ?: ""),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.testTag("memory_source_${memory.id}")
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Where this memory came from, so the user can judge it (and spot old demo data).
+                Text(
+                    text = memory.sourceLabel + (memory.updatedAt?.let { " · edited " + formatMemoryDate(it) } ?: ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f).testTag("memory_source_${memory.id}")
+                )
+                // Per-memory consent to send it to Claude.
+                androidx.compose.material3.FilterChip(
+                    selected = memory.shareWithCloud,
+                    onClick = onToggleShare,
+                    label = {
+                        Text(
+                            when {
+                                !memory.shareWithCloud -> "Share with Claude"
+                                sharingOn && memory.isActive -> "Shared with Claude"
+                                else -> "Marked to share"
+                            },
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (memory.shareWithCloud) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    },
+                    modifier = Modifier.testTag("share_memory_${memory.id}")
+                )
+            }
         }
     }
 }

@@ -75,6 +75,7 @@ class DatabaseUpgradeTest {
                 assertNotNull("memory lost when upgrading from version $v", memory)
                 assertEquals("I prefer short answers", memory!!.content)
                 assertEquals(MemoryCategory.PREFERENCE, memory.category)
+                assertEquals("existing memories start unshared", false, memory.shareWithCloud)
                 if (v < 5) {
                     // Memories from before origins were recorded are labelled as such, never guessed.
                     org.junit.Assert.assertNull(memory.source)

@@ -103,7 +103,7 @@ class AuraViewModel @JvmOverloads constructor(
     private val identityPrefs = application.getSharedPreferences("aura_identity_prefs", Context.MODE_PRIVATE)
     private val memoryPrefs = application.getSharedPreferences("aura_memory_prefs", Context.MODE_PRIVATE)
 
-    // Cloud chat is opt-in. Personal memories/projects/settings remain blocked.
+    // Cloud chat is opt-in. Personal details go only with the separate sharing switch below.
     private val privacyPrefs = application.getSharedPreferences("aura_privacy_prefs", Context.MODE_PRIVATE)
     private val _cloudChatEnabled = MutableStateFlow(privacyPrefs.getBoolean("cloud_chat_enabled", false))
     val cloudChatEnabled: StateFlow<Boolean> = _cloudChatEnabled.asStateFlow()
@@ -111,6 +111,16 @@ class AuraViewModel @JvmOverloads constructor(
     fun setCloudChatEnabled(enabled: Boolean) {
         privacyPrefs.edit().putBoolean("cloud_chat_enabled", enabled).apply()
         _cloudChatEnabled.value = enabled
+    }
+
+    // Off by default. When on, Claude also gets your name, main interest, and only the
+    // memories you marked "Share with Claude". Projects never go.
+    private val _sharePersonalContext = MutableStateFlow(privacyPrefs.getBoolean("share_personal_context", false))
+    val sharePersonalContext: StateFlow<Boolean> = _sharePersonalContext.asStateFlow()
+
+    fun setSharePersonalContext(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("share_personal_context", enabled).apply()
+        _sharePersonalContext.value = enabled
     }
 
     // Claude relay access: anonymous Firebase sign-in gives this install an "access ID",
@@ -386,7 +396,8 @@ class AuraViewModel @JvmOverloads constructor(
                 currentProject = currentProj,
                 userSettings = userSettings.value,
                 allowCloudRequest = cloudChatEnabled.value,
-                history = cloudHistory
+                history = cloudHistory,
+                sharePersonalContext = sharePersonalContext.value
             ).collect { state ->
                 when (state) {
                     is HybridAiState.Starting -> {}
@@ -468,6 +479,13 @@ class AuraViewModel @JvmOverloads constructor(
                     source = MemorySource.TYPED
                 )
             )
+        }
+    }
+
+    /** Marks or unmarks a memory as OK to send to Claude. */
+    fun toggleMemoryShare(memory: MemoryEntity) {
+        viewModelScope.launch {
+            memoryRepository.updateMemory(memory.copy(shareWithCloud = !memory.shareWithCloud))
         }
     }
 

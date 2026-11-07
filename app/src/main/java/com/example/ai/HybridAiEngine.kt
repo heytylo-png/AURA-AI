@@ -77,7 +77,9 @@ class HybridAiEngine(
         userSettings: UserSettingsEntity? = null,
         allowCloudRequest: Boolean = false,
         /** Earlier cloud exchanges of this conversation (see [CloudHistory]); sent only to the cloud. */
-        history: List<ChatTurn> = emptyList()
+        history: List<ChatTurn> = emptyList(),
+        /** The user's "share with Claude" switch: profile + memories they marked. Off = nothing personal. */
+        sharePersonalContext: Boolean = false
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
@@ -144,7 +146,7 @@ class HybridAiEngine(
             currentProject = currentProject,
             userSettings = userSettings,
             history = history
-        ).withoutPersonalContext()
+        ).forCloud(sharePersonalContext)
 
         var streamedText = ""
         var failure: String? = null
@@ -178,7 +180,7 @@ class HybridAiEngine(
                         fullText = done.fullText,
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
-                        reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " + sentSummary(history),
+                        reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " + sentSummary(history, providerRequest),
                         proposedAction = null
                     )
                 )
@@ -219,11 +221,23 @@ class HybridAiEngine(
     }
 
     /** Says exactly what went to the cloud, for the message's details sheet. */
-    private fun sentSummary(history: List<ChatTurn>): String {
+    private fun sentSummary(history: List<ChatTurn>, sent: AiProviderRequest): String {
         val earlier = history.count { it.role == ChatTurn.Role.USER }
-        val messages = if (earlier == 0) "Sent: this message" else
-            "Sent: this message and the last $earlier earlier Claude exchange${if (earlier == 1) "" else "s"} in this chat"
-        return "$messages, plus the assistant's name and personality. Not sent: memories, projects, profile, custom directives."
+        val parts = mutableListOf(
+            if (earlier == 0) "this message" else
+                "this message and the last $earlier earlier Claude exchange${if (earlier == 1) "" else "s"} in this chat",
+            "the assistant's name and personality"
+        )
+        if (sent.allowPersonalContext) {
+            val n = sent.activeMemories.size
+            if (n > 0) parts += "$n memor${if (n == 1) "y" else "ies"} you marked to share"
+            if (sent.userSettings != null) parts += "your name and main interest"
+        }
+        val notSent = if (sent.allowPersonalContext)
+            "Not sent: memories you didn't mark, projects, custom directives."
+        else
+            "Not sent: memories, projects, profile, custom directives."
+        return "Sent: ${parts.joinToString(", ")}. $notSent"
     }
 
     /** A status message from Aura itself, not an AI answer. */

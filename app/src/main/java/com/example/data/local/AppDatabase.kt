@@ -22,7 +22,7 @@ import com.example.data.model.UserSettingsEntity
  *  2. the new schema file committed under app/schemas/ (written by the build),
  * DatabaseUpgradeTest fails until both exist.
  */
-const val DATABASE_VERSION = 5
+const val DATABASE_VERSION = 6
 
 @Database(
     entities = [
@@ -88,8 +88,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 5 -> 6: per-memory "share with Claude" flag; every existing memory starts unshared. */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE memories ADD COLUMN shareWithCloud INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         /** Every schema upgrade, in order. */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_4_5)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_4_5, MIGRATION_5_6)
 
         @Volatile
         private var INSTANCE: AppDatabase? = null
