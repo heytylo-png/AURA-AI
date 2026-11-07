@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.theme.auraSwitchColors
 import com.example.ui.theme.auraBackground
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -326,6 +327,7 @@ fun SettingsScreen(
                         androidx.compose.material3.Switch(
                             checked = cloudChatEnabled,
                             onCheckedChange = viewModel::setCloudChatEnabled,
+                            colors = auraSwitchColors(),
                             modifier = Modifier.testTag("cloud_chat_consent_switch")
                         )
                     }
@@ -350,6 +352,7 @@ fun SettingsScreen(
                         androidx.compose.material3.Switch(
                             checked = sharePersonal,
                             onCheckedChange = viewModel::setSharePersonalContext,
+                            colors = auraSwitchColors(),
                             enabled = cloudChatEnabled,
                             modifier = Modifier.testTag("share_personal_context_switch")
                         )

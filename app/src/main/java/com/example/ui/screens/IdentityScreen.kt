@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.theme.auraSwitchColors
 import com.example.ui.theme.auraBackground
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -388,6 +389,7 @@ fun IdentityScreen(viewModel: AuraViewModel) {
                         Switch(
                             checked = autoSpeak,
                             onCheckedChange = { autoSpeak = it },
+                            colors = auraSwitchColors(),
                             modifier = Modifier.testTag("auto_speak_switch")
                         )
                     }
