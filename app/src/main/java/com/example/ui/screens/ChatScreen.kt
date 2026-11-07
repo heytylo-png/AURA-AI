@@ -147,9 +147,9 @@ fun ChatScreen(viewModel: AuraViewModel) {
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
+            // Voice fills the box; the user reviews it and taps send (audit SEC-13).
             viewModel.voiceManager.startListening { spoken ->
                 inputText = spoken
-                viewModel.sendMessage(spoken)
             }
         }
     }
