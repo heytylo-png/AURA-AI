@@ -37,6 +37,12 @@ object AuraPrompt {
                 "You can see only this conversation. You have no access to the user's saved memories, " +
                     "goals, projects or profile, so never claim to remember or track them."
             )
+        } else {
+            appendLine(
+                "You can see this conversation and only the personal details listed below, which the user chose " +
+                    "to share. You cannot see their other memories, projects or tasks; never claim to. " +
+                    "Use these details only where they help."
+            )
         }
 
         if (userSettings != null && (userSettings.userName.isNotBlank() || userSettings.primaryInterest.isNotBlank())) {

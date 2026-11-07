@@ -312,7 +312,7 @@ fun SettingsScreen(
                     Text("Cloud AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "When enabled, the message you send in a chat is sent to Anthropic's Claude through your private Aura relay, together with that chat's earlier Claude exchanges (so it can follow the conversation) and the assistant's name and personality. Keep this off to use on-device replies only. Aura does not send your saved memories, projects, profile settings, custom directives or core values, or messages that were answered on this phone.",
+                        text = "When enabled, the message you send in a chat is sent to Anthropic's Claude through your private Aura relay, together with that chat's earlier Claude exchanges (so it can follow the conversation) and the assistant's name and personality. Keep this off to use on-device replies only. Unless you turn on sharing below, Aura does not send your memories or profile. It never sends projects, custom directives, core values, or messages that were answered on this phone.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -327,6 +327,31 @@ fun SettingsScreen(
                             checked = cloudChatEnabled,
                             onCheckedChange = viewModel::setCloudChatEnabled,
                             modifier = Modifier.testTag("cloud_chat_consent_switch")
+                        )
+                    }
+
+                    // Separate consent for personal details.
+                    val sharePersonal by viewModel.sharePersonalContext.collectAsState()
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Share personal details with Claude", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "Sends your name and main interest, plus only the memories you mark \"Share with Claude\" in Memory (up to 12). Other memories and all projects stay on this phone.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = sharePersonal,
+                            onCheckedChange = viewModel::setSharePersonalContext,
+                            enabled = cloudChatEnabled,
+                            modifier = Modifier.testTag("share_personal_context_switch")
                         )
                     }
 

@@ -1,5 +1,6 @@
 package com.example.data.model
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -31,7 +32,10 @@ data class MemoryEntity(
     /** Where this memory came from; null = saved by a version of Aura before this was recorded. */
     val source: MemorySource? = null,
     /** When the user last edited it; null = never edited. */
-    val updatedAt: Long? = null
+    val updatedAt: Long? = null,
+    /** The user marked this memory as OK to send to Claude (only used when sharing is on in Settings). */
+    @ColumnInfo(defaultValue = "0")
+    val shareWithCloud: Boolean = false
 )
 
 /** How a memory got into Aura. Shown on each memory so the user can judge it. */
