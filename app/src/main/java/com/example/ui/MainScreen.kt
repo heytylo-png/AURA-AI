@@ -129,15 +129,8 @@ fun MainScreen(viewModel: AuraViewModel) {
                     selected = selectedTab == 4,
                     onClick = { viewModel.setSelectedTab(4) },
                     icon = {
-                        BadgedBox(
-                            badge = {
-                                if (allMemories.isNotEmpty()) {
-                                    Badge { Text("${allMemories.size}") }
-                                }
-                            }
-                        ) {
-                            Icon(Icons.Default.Psychology, contentDescription = "Memory")
-                        }
+                        // No count badge: badges mean "needs attention", and memories don't.
+                        Icon(Icons.Default.Psychology, contentDescription = "Memory")
                     },
                     label = { Text("Memory") },
                     modifier = Modifier.testTag("nav_tab_memory")

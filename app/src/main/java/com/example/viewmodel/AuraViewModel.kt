@@ -17,6 +17,8 @@ import com.example.data.model.AiModelUsed
 import com.example.data.model.ChatMessageEntity
 import com.example.data.model.MemoryCategory
 import com.example.data.model.MemoryEntity
+import com.example.data.model.MemorySource
+import com.example.data.model.edited
 import com.example.data.model.MilestoneEntity
 import com.example.data.model.PersonalityArchetype
 import com.example.data.model.ProjectEntity
@@ -460,11 +462,20 @@ class AuraViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             memoryRepository.insertMemory(
                 MemoryEntity(
-                    content = content,
+                    content = content.trim(),
                     category = category,
-                    importance = importance
+                    importance = importance,
+                    source = MemorySource.TYPED
                 )
             )
+        }
+    }
+
+    /** Saves the user's edit of a memory; blank text is ignored. */
+    fun editMemory(memory: MemoryEntity, content: String, category: MemoryCategory, importance: Int) {
+        val updated = memory.edited(content, category, importance, System.currentTimeMillis()) ?: return
+        viewModelScope.launch {
+            memoryRepository.updateMemory(updated)
         }
     }
 

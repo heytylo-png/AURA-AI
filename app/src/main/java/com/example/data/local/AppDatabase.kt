@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.model.ChatMessageEntity
 import com.example.data.model.ChatSessionEntity
 import com.example.data.model.MemoryEntity
@@ -21,7 +22,7 @@ import com.example.data.model.UserSettingsEntity
  *  2. the new schema file committed under app/schemas/ (written by the build),
  * DatabaseUpgradeTest fails until both exist.
  */
-const val DATABASE_VERSION = 4
+const val DATABASE_VERSION = 5
 
 @Database(
     entities = [
@@ -78,8 +79,17 @@ abstract class AppDatabase : RoomDatabase() {
         /** Oldest version whose schema is in app/schemas/; upgrades are guaranteed from here on. */
         const val OLDEST_SUPPORTED_VERSION = 4
 
-        /** Every schema upgrade, in order. Empty while the app is still on its first exported version. */
-        val MIGRATIONS: Array<Migration> = arrayOf()
+        /** 4 -> 5: memories record where they came from and when they were last edited. */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Existing memories keep source = NULL ("saved by an older version").
+                db.execSQL("ALTER TABLE memories ADD COLUMN source TEXT")
+                db.execSQL("ALTER TABLE memories ADD COLUMN updatedAt INTEGER")
+            }
+        }
+
+        /** Every schema upgrade, in order. */
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_4_5)
 
         @Volatile
         private var INSTANCE: AppDatabase? = null

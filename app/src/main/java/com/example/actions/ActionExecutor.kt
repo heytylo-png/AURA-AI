@@ -7,6 +7,7 @@ import com.example.data.model.ActionStatus
 import com.example.data.model.ActionType
 import com.example.data.model.MemoryCategory
 import com.example.data.model.MemoryEntity
+import com.example.data.model.MemorySource
 import com.example.data.model.MilestoneEntity
 import com.example.data.model.ProjectEntity
 import com.example.data.model.ProjectStatus
@@ -95,7 +96,8 @@ class ActionExecutor(
                         content = content,
                         category = category,
                         importance = payload.optInt("importance", 3).coerceIn(1, 5),
-                        isActive = true
+                        isActive = true,
+                        source = MemorySource.CHAT_APPROVED
                     )
                 )
             }

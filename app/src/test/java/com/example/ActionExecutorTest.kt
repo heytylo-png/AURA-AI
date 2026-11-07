@@ -79,6 +79,11 @@ class ActionExecutorTest {
         assertEquals(ActionStatus.APPROVED_EXECUTED, action.status)
         assertEquals(1_000L, action.executedAt)
         assertEquals(listOf("Likes tea"), db.memoryDao().getActiveMemories().map { it.content })
+        assertEquals(
+            "a memory saved by approving a chat proposal says so",
+            com.example.data.model.MemorySource.CHAT_APPROVED,
+            db.memoryDao().getActiveMemories().single().source
+        )
     }
 
     @Test
