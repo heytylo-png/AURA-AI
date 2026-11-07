@@ -1095,7 +1095,7 @@ private fun TaskStatusSummaryCard(
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.outline,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier
                                     .size(14.dp)
                                     .clickable { onViewTasks() }

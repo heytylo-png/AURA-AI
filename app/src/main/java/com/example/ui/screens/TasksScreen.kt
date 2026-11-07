@@ -166,7 +166,7 @@ fun TasksScreen(viewModel: AuraViewModel) {
                     Text(
                         text = "When Aura recommends creating projects, storing memories, or scheduling tasks, you will review and approve them here.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }

@@ -182,9 +182,9 @@ fun MemoryScreen(viewModel: AuraViewModel) {
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            text = "Tell Aura in Chat (\"Remember that I prefer...\") or tap + to manually store a knowledge item.",
+                            text = "Tap + to add one. In Auto or Local mode you can also start a chat message with \"Remember…\". Claude can't save memories.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                     }
