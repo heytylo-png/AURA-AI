@@ -171,15 +171,15 @@ class HybridAiEngine(
         val done = completed
         when {
             done != null -> {
-                // Check if the prompt inspired an action proposal even in cloud
-                val localScan = localEngine.processQuery(prompt, identity, activeMemories, projects, currentProject, userSettings)
+                // No keyword-scanned action cards under a cloud reply (audit SEC-07 / FB-06):
+                // Claude doesn't know about them and may tell the user the opposite.
                 emit(
                     HybridAiState.Completed(
                         fullText = done.fullText,
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
                         reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " + sentSummary(history),
-                        proposedAction = localScan.proposedAction
+                        proposedAction = null
                     )
                 )
             }

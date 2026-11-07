@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -326,5 +327,22 @@ class AiProviderContractTest {
         assertTrue(prompt.contains("You cannot take actions or change anything in the app"))
         assertTrue(prompt.contains("never list \"proposed actions for approval\""))
         assertFalse(prompt.contains("Actions only happen after the user approves them in the app"))
+    }
+
+    @Test
+    fun cloudRepliesNeverCarryKeywordActionCards() {
+        // These prompts make the on-phone keyword engine propose actions; a Claude reply must not.
+        for (prompt in listOf("remember that I like tea", "create project Garden", "add task: buy milk")) {
+            val result = completed(run(engine(FakeProvider()), HybridRoutingMode.FORCE_CLOUD, prompt = prompt))
+            assertEquals(com.example.data.model.AiModelUsed.CLOUD, result.modelUsed)
+            assertNull("no approval card under a Claude reply to \"$prompt\"", result.proposedAction)
+        }
+    }
+
+    @Test
+    fun onPhoneRepliesStillProposeActions() {
+        val result = completed(run(engine(FakeProvider()), HybridRoutingMode.FORCE_LOCAL, prompt = "remember that I like tea"))
+        assertEquals(com.example.data.model.AiModelUsed.LOCAL, result.modelUsed)
+        assertNotNull(result.proposedAction)
     }
 }
