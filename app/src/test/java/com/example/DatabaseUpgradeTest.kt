@@ -75,6 +75,11 @@ class DatabaseUpgradeTest {
                 assertNotNull("memory lost when upgrading from version $v", memory)
                 assertEquals("I prefer short answers", memory!!.content)
                 assertEquals(MemoryCategory.PREFERENCE, memory.category)
+                if (v < 5) {
+                    // Memories from before origins were recorded are labelled as such, never guessed.
+                    org.junit.Assert.assertNull(memory.source)
+                    org.junit.Assert.assertNull(memory.updatedAt)
+                }
 
                 val session = db.chatSessionDao().getSessionById(1)
                 assertEquals("Weekend plans", session?.title)

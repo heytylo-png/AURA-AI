@@ -59,6 +59,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.MemoryCategory
 import com.example.data.model.MemoryEntity
+import com.example.data.model.sourceLabel
+import androidx.compose.material.icons.filled.Edit
 import com.example.viewmodel.AuraViewModel
 
 @Composable
@@ -70,6 +72,7 @@ fun MemoryScreen(viewModel: AuraViewModel) {
 
     var showAddDialog by remember { mutableStateOf(false) }
     var memoryPendingDelete by remember { mutableStateOf<MemoryEntity?>(null) }
+    var memoryBeingEdited by remember { mutableStateOf<MemoryEntity?>(null) }
     var showClearAllDialog by remember { mutableStateOf(false) }
 
     Box(
@@ -199,7 +202,8 @@ fun MemoryScreen(viewModel: AuraViewModel) {
                         MemoryItemCard(
                             memory = memory,
                             onToggleActive = { viewModel.toggleMemoryActive(memory) },
-                            onDelete = { memoryPendingDelete = memory }
+                            onDelete = { memoryPendingDelete = memory },
+                            onEdit = { memoryBeingEdited = memory }
                         )
                     }
                 }
@@ -266,6 +270,17 @@ fun MemoryScreen(viewModel: AuraViewModel) {
             }
         )
     }
+
+    memoryBeingEdited?.let { memory ->
+        AddMemoryDialog(
+            onDismiss = { memoryBeingEdited = null },
+            onConfirm = { content, cat, importance ->
+                viewModel.editMemory(memory, content, cat, importance)
+                memoryBeingEdited = null
+            },
+            initial = memory
+        )
+    }
 }
 
 @Composable
@@ -289,11 +304,14 @@ fun FilterChip(label: String, isSelected: Boolean, onClick: () -> Unit) {
 fun MemoryItemCard(
     memory: MemoryEntity,
     onToggleActive: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onEdit: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClickLabel = "Edit memory", onClick = onEdit)
             .testTag("memory_item_${memory.id}"),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
@@ -331,7 +349,7 @@ fun MemoryItemCard(
                             Icon(
                                 imageVector = Icons.Default.Star,
                                 contentDescription = null,
-                                tint = Color(0xFFFFB300),
+                                tint = MaterialTheme.colorScheme.tertiary,
                                 modifier = Modifier.size(13.dp)
                             )
                         }
@@ -350,6 +368,15 @@ fun MemoryItemCard(
                     )
 
                     Spacer(Modifier.width(4.dp))
+
+                    IconButton(onClick = onEdit, modifier = Modifier.size(32.dp).testTag("edit_memory_${memory.id}")) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit Memory",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
 
                     IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
                         Icon(
@@ -372,22 +399,37 @@ fun MemoryItemCard(
                 else
                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             )
+
+            Spacer(Modifier.height(6.dp))
+
+            // Where this memory came from, so the user can judge it (and spot old demo data).
+            Text(
+                text = memory.sourceLabel + (memory.updatedAt?.let { " · edited " + formatMemoryDate(it) } ?: ""),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("memory_source_${memory.id}")
+            )
         }
     }
 }
 
+private fun formatMemoryDate(millis: Long): String =
+    java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(millis))
+
 @Composable
 fun AddMemoryDialog(
     onDismiss: () -> Unit,
-    onConfirm: (String, MemoryCategory, Int) -> Unit
+    onConfirm: (String, MemoryCategory, Int) -> Unit,
+    /** When set, the dialog edits this memory instead of adding a new one. */
+    initial: MemoryEntity? = null
 ) {
-    var content by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf(MemoryCategory.PREFERENCE) }
-    var importance by remember { mutableFloatStateOf(3f) }
+    var content by remember { mutableStateOf(initial?.content ?: "") }
+    var category by remember { mutableStateOf(initial?.category ?: MemoryCategory.PREFERENCE) }
+    var importance by remember { mutableFloatStateOf((initial?.importance ?: 3).toFloat()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Store Persistent Memory", style = MaterialTheme.typography.titleMedium) },
+        title = { Text(if (initial == null) "Add memory" else "Edit memory", style = MaterialTheme.typography.titleMedium) },
         text = {
             Column {
                 OutlinedTextField(
@@ -437,7 +479,7 @@ fun AddMemoryDialog(
                 enabled = content.isNotBlank(),
                 modifier = Modifier.testTag("save_memory_confirm_btn")
             ) {
-                Text("Save to Memory")
+                Text(if (initial == null) "Save to Memory" else "Save changes")
             }
         },
         dismissButton = {

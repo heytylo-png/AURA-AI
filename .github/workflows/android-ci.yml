@@ -48,6 +48,10 @@ jobs:
           if [ -n "$changes" ]; then
             echo "$changes"
             git diff -- app/schemas || true
+            # Print new schema files in full so they can be committed from the log.
+            git ls-files --others --exclude-standard -- app/schemas | while read -r f; do
+              echo "::group::New file $f"; cat "$f"; echo; echo "::endgroup::"
+            done
             echo "::error title=Room schema not committed::The build generated app/schemas changes that are not committed. Commit app/schemas/ and add a Migration for any version change."
             exit 1
           fi
