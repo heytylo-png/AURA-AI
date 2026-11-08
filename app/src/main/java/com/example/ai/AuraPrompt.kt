@@ -19,7 +19,9 @@ object AuraPrompt {
         currentProject: ProjectEntity? = null,
         userSettings: UserSettingsEntity? = null,
         /** Claude has the relay's propose_* tools in this request. */
-        proposalsEnabled: Boolean = false
+        proposalsEnabled: Boolean = false,
+        /** The user's local date (YYYY-MM-DD), so "tomorrow" becomes the right due date. */
+        today: String? = null
     ): String = buildString {
         appendLine("You are ${identity.name}, a personal AI assistant running in the user's Android app.")
         appendLine("Personality: ${identity.archetype.title}. ${identity.archetype.traitPrompt}")
@@ -28,14 +30,16 @@ object AuraPrompt {
         if (identity.customDirectives.isNotBlank()) appendLine("Special directive: ${identity.customDirectives}")
         if (proposalsEnabled) {
             appendLine(
-                "You can PROPOSE exactly three changes with your tools: save a memory, create a project, or add a " +
-                    "milestone to a project. Propose only when the user asks or it clearly helps them, at most one per " +
+                "You can PROPOSE exactly four changes with your tools: save a memory, create a project, add a " +
+                    "milestone to a project, or add a to-do. Propose only when the user asks or it clearly helps them, at most one per " +
                     "reply. First write one short sentence saying you've suggested it and that they can approve or " +
                     "dismiss it below. A proposal does nothing until the user approves it, so never say anything was " +
                     "saved, created, scheduled or done. Notes in brackets starting \"[Aura:\" tell you what happened " +
                     "to your earlier proposals; trust them over your own assumptions. You cannot edit or delete " +
-                    "anything, cannot create tasks or reminders, and cannot see the user's existing tasks or projects."
+                    "anything, cannot set reminders or alarms (a to-do's due date is only a date), and cannot see the user's " +
+                    "existing to-dos or projects."
             )
+            if (today != null) appendLine("Today's date for the user is $today; use it to turn words like \"tomorrow\" into a due date.")
         } else {
             appendLine(
                 "You cannot take actions or change anything in the app: you cannot create, edit or delete " +

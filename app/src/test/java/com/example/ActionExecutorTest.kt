@@ -114,6 +114,15 @@ class ActionExecutorTest {
     }
 
     @Test
+    fun `a to-do proposed by Claude is labelled as from chat`() = runBlocking {
+        val id = insert(ActionType.CREATE_TODO, """{"title":"Walk dogs","origin":"claude","dueDate":null,"projectId":null}""")
+        assertEquals(ActionResult.Succeeded, executor.execute(id))
+        val todo = db.todoDao().observeVisible().first().single()
+        assertEquals(com.example.data.model.TodoSource.CHAT_APPROVED, todo.source)
+        assertNull(todo.dueEpochDay)
+    }
+
+    @Test
     fun `create todo with a bad date or missing project saves nothing`() = runBlocking {
         val badDate = insert(ActionType.CREATE_TODO, """{"title":"Buy milk","dueDate":"2026-02-30"}""")
         val noProject = insert(ActionType.CREATE_TODO, """{"title":"Buy milk","projectId":42}""")

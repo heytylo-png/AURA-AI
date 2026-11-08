@@ -214,7 +214,7 @@ test("proposal tools are added only when the app asks, and only the relay's own"
   assert.equal(plain.tools, undefined, "no tools unless asked");
   assert.deepEqual(
     withActions.tools.map((t) => t.name),
-    ["propose_save_memory", "propose_create_project", "propose_add_milestone"]
+    ["propose_save_memory", "propose_create_project", "propose_add_milestone", "propose_add_todo"]
   );
   assert.deepEqual(withActions.tool_choice, { type: "auto", disable_parallel_tool_use: true });
   assert.equal(sneaky.tools, undefined, "tools sent by the app are ignored");

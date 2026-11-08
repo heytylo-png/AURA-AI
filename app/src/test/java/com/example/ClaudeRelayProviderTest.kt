@@ -206,6 +206,7 @@ class ClaudeRelayProviderTest {
         val body = JSONObject(server.takeRequest().body.readUtf8())
         assertEquals(true, body.getBoolean("actions"))
         assertTrue(body.getString("system").contains("You can PROPOSE"))
+        assertTrue("Claude gets today's date for due dates", body.getString("system").contains("Today's date for the user is "))
     }
 
     @Test

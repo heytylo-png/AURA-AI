@@ -75,6 +75,23 @@ export const PROPOSAL_TOOLS = [
       required: ["project_title", "milestone_title", "reason"],
     },
   },
+  {
+    name: "propose_add_todo",
+    description:
+      "Suggest adding a to-do to the user's list. You cannot see their existing to-dos or projects; use the " +
+      "project name the user gave, if any. Due dates are dates only (no reminders). The user approves it in the app.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        notes: { type: "string", maxLength: 2000 },
+        due_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$", maxLength: 10, description: "YYYY-MM-DD, only if the user gave a date." },
+        project_title: { type: "string", maxLength: 80 },
+        reason: REASON,
+      },
+      required: ["title", "reason"],
+    },
+  },
 ];
 
 export class RelayError extends Error {

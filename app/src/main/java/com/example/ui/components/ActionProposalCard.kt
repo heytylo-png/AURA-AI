@@ -25,6 +25,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import com.example.data.model.ProjectEntity
@@ -73,7 +74,9 @@ fun ActionProposalCard(
     var primary by remember(action.id) { mutableStateOf(initial.first) }
     var secondary by remember(action.id) { mutableStateOf(initial.second) }
     var projectId by remember(action.id) { mutableStateOf(action.associatedProjectId) }
-    val edited = if (editable) CloudProposals.withEdits(action, primary, secondary, projectId) else null
+    var dueDay by remember(action.id) { mutableStateOf(CloudProposals.dueOf(action)) }
+    val edited = if (editable) CloudProposals.withEdits(action, primary, secondary, projectId)
+        ?.let { CloudProposals.withDue(it, dueDay) } else null
 
     val cardBorder = when (action.status) {
         ActionStatus.PROPOSED -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
@@ -190,6 +193,17 @@ fun ActionProposalCard(
                 if (action.actionType == ActionType.ADD_MILESTONE) {
                     Spacer(Modifier.height(6.dp))
                     ProjectPicker(projects = projects, selectedId = projectId, onPick = { projectId = it }, actionId = action.id)
+                }
+                if (action.actionType == ActionType.CREATE_TODO) {
+                    Spacer(Modifier.height(6.dp))
+                    TodoCardExtras(
+                        actionId = action.id,
+                        due = dueDay,
+                        onDue = { dueDay = it },
+                        projects = projects,
+                        projectId = projectId,
+                        onProject = { projectId = it }
+                    )
                 }
                 if (edited == null) {
                     Spacer(Modifier.height(4.dp))
@@ -316,5 +330,48 @@ private fun ProjectPicker(projects: List<ProjectEntity>, selectedId: Long?, onPi
                 DropdownMenuItem(text = { Text(project.title) }, onClick = { onPick(project.id); open = false })
             }
         }
+    }
+}
+
+/** Due date and optional project for a to-do card. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun TodoCardExtras(
+    actionId: Long,
+    due: Long?,
+    onDue: (Long?) -> Unit,
+    projects: List<ProjectEntity>,
+    projectId: Long?,
+    onProject: (Long?) -> Unit
+) {
+    var pickingDate by remember { mutableStateOf(false) }
+    var pickingProject by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(onClick = { pickingDate = true }, modifier = Modifier.weight(1f).testTag("action_todo_due_$actionId")) {
+            Text(due?.let { "Due ${com.example.data.model.TodoRules.formatDue(it)}" } ?: "No due date", fontSize = 13.sp)
+        }
+        if (due != null) TextButton(onClick = { onDue(null) }) { Text("Clear", fontSize = 13.sp) }
+    }
+    Box {
+        OutlinedButton(onClick = { pickingProject = true }, modifier = Modifier.fillMaxWidth().testTag("action_todo_project_$actionId")) {
+            Text(projects.firstOrNull { it.id == projectId }?.title ?: "No project", fontSize = 13.sp)
+        }
+        DropdownMenu(expanded = pickingProject, onDismissRequest = { pickingProject = false }) {
+            DropdownMenuItem(text = { Text("No project") }, onClick = { onProject(null); pickingProject = false })
+            projects.forEach { p -> DropdownMenuItem(text = { Text(p.title) }, onClick = { onProject(p.id); pickingProject = false }) }
+        }
+    }
+    if (pickingDate) {
+        val state = androidx.compose.material3.rememberDatePickerState(initialSelectedDateMillis = due?.let { it * 86_400_000L })
+        androidx.compose.material3.DatePickerDialog(
+            onDismissRequest = { pickingDate = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { onDue(Math.floorDiv(it, 86_400_000L)) }
+                    pickingDate = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { pickingDate = false }) { Text("Cancel") } }
+        ) { androidx.compose.material3.DatePicker(state = state) }
     }
 }
