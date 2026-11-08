@@ -111,6 +111,7 @@ fun DashboardScreen(
     val projects by viewModel.allProjects.collectAsState()
     val taskActions by viewModel.allTaskActions.collectAsState()
     val pendingCount by viewModel.pendingApprovalCount.collectAsState()
+    val openTodos by viewModel.openTodoCount.collectAsState()
     val memories by viewModel.allMemories.collectAsState()
 
     var quickPromptText by remember { mutableStateOf("") }
@@ -217,6 +218,7 @@ fun DashboardScreen(
                         activeProjectsCount = projects.size,
                         pendingApprovalsCount = pendingCount,
                         storedMemoriesCount = memories.size,
+                        openTodosCount = openTodos,
                         routingMode = routingMode.label,
                         onProjectsClick = onNavigateToProjects,
                         onTasksClick = onNavigateToTasks,
@@ -657,6 +659,7 @@ private fun SystemMetricsStrip(
     activeProjectsCount: Int,
     pendingApprovalsCount: Int,
     storedMemoriesCount: Int,
+    openTodosCount: Int = 0,
     routingMode: String,
     onProjectsClick: () -> Unit,
     onTasksClick: () -> Unit,
@@ -677,10 +680,19 @@ private fun SystemMetricsStrip(
 
         MetricCard(
             modifier = Modifier.weight(1f),
+            label = "To-dos",
+            value = "$openTodosCount",
+            icon = Icons.Default.CheckCircle,
+            accentColor = MaterialTheme.colorScheme.primary,
+            onClick = onTasksClick
+        )
+
+        MetricCard(
+            modifier = Modifier.weight(1f),
             label = "Approvals",
             value = "$pendingApprovalsCount",
             icon = Icons.Default.HourglassEmpty,
-            accentColor = if (pendingApprovalsCount > 0) Color(0xFFFFB74D) else MaterialTheme.colorScheme.secondary,
+            accentColor = if (pendingApprovalsCount > 0) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary,
             onClick = onTasksClick
         )
 
@@ -689,7 +701,7 @@ private fun SystemMetricsStrip(
             label = "Memories",
             value = "$storedMemoriesCount",
             icon = Icons.Default.Psychology,
-            accentColor = Color(0xFF00E676),
+            accentColor = MaterialTheme.colorScheme.secondary,
             onClick = onMemoriesClick
         )
     }

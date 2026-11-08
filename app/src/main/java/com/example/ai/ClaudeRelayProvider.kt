@@ -62,7 +62,8 @@ class ClaudeRelayProvider(
                 "system",
                 AuraPrompt.system(
                     request.identity, request.activeMemories, request.currentProject, request.userSettings,
-                    proposalsEnabled = request.allowProposals
+                    proposalsEnabled = request.allowProposals,
+                    today = if (request.allowProposals) com.example.data.model.TodoRules.formatDue(com.example.data.model.TodoRules.today()) else null
                 )
             )
             .put("messages", messagesJson(request))

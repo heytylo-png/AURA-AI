@@ -193,6 +193,12 @@ fun ProjectCard(
     val progress = if (milestones.isNotEmpty()) completedCount.toFloat() / milestones.size else 0f
 
     var showAddMilestoneDialog by remember { mutableStateOf(false) }
+    var showAddTodoDialog by remember { mutableStateOf(false) }
+    val allTodos by viewModel.visibleTodos.collectAsState()
+    val allProjects by viewModel.allProjects.collectAsState()
+    val projectTodos = remember(allTodos, project.id) {
+        allTodos.filter { it.projectId == project.id && !it.done }.sortedWith(com.example.data.model.TodoRules.openOrder)
+    }
     var showAddArtifactDialog by remember { mutableStateOf(false) }
     var statusMenuExpanded by remember { mutableStateOf(false) }
 
@@ -415,6 +421,40 @@ fun ProjectCard(
                 }
             }
 
+            // Open to-dos for this project (managed in the Tasks tab).
+            if (projectTodos.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "To-dos (${projectTodos.size} open)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                projectTodos.take(5).forEach { todo ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.toggleTodoDone(todo) }
+                            .padding(vertical = 4.dp)
+                            .testTag("project_todo_${todo.id}")
+                    ) {
+                        Icon(Icons.Default.RadioButtonUnchecked, contentDescription = "Mark done", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(8.dp))
+                        Text(todo.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                        todo.dueEpochDay?.let {
+                            Text(
+                                com.example.ui.components.dueLabel(it, com.example.data.model.TodoRules.today()),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (com.example.data.model.TodoRules.isOverdue(todo, com.example.data.model.TodoRules.today())) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+                if (projectTodos.size > 5) {
+                    Text("+${projectTodos.size - 5} more in Tasks", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
             Spacer(Modifier.height(12.dp))
 
             // Action row
@@ -428,6 +468,12 @@ fun ProjectCard(
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("+ Milestone", fontSize = 11.sp)
+                    }
+
+                    TextButton(onClick = { showAddTodoDialog = true }, modifier = Modifier.testTag("project_add_todo_${project.id}")) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("+ To-do", fontSize = 11.sp)
                     }
 
                     TextButton(onClick = { showAddArtifactDialog = true }) {
@@ -453,6 +499,16 @@ fun ProjectCard(
                 }
             }
         }
+    }
+
+    if (showAddTodoDialog) {
+        com.example.ui.components.TodoEditorDialog(
+            initial = null,
+            projects = allProjects,
+            presetProjectId = project.id,
+            onSave = { t, n, d, p -> viewModel.addTodo(t, n, d, p) },
+            onDismiss = { showAddTodoDialog = false }
+        )
     }
 
     if (showAddMilestoneDialog) {

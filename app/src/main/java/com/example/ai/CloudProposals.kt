@@ -101,6 +101,39 @@ object CloudProposals {
                     }
                 }
             }
+            "propose_add_todo" -> {
+                val cleaned = TodoRules.clean(input.optString("title"), input.optString("notes"))
+                val dueText = input.optString("due_date").trim()
+                val due = runCatching { TodoRules.parseDue(dueText) }
+                val projectName = input.optString("project_title").trim()
+                when {
+                    cleaned == null -> Result.Dropped("the to-do title was empty or too long, or its notes were too long")
+                    due.isFailure -> Result.Dropped("the due date \"${dueText.take(20)}\" isn't a real date")
+                    else -> {
+                        val match = if (projectName.isEmpty()) null
+                        else projects.singleOrNull { it.title.trim().equals(projectName, ignoreCase = true) }
+                        val payload = JSONObject()
+                            .put("title", cleaned.first)
+                            .put("notes", cleaned.second)
+                            .put("dueDate", due.getOrNull()?.let { TodoRules.formatDue(it) } ?: JSONObject.NULL)
+                            .put("projectId", match?.id ?: JSONObject.NULL)
+                            .put("projectTitle", projectName)
+                            .put("origin", "claude")
+                        Result.Card(
+                            TaskActionEntity(
+                                title = "Add to-do",
+                                description = cleaned.first,
+                                actionType = ActionType.CREATE_TODO,
+                                reasoning = reason,
+                                payloadJson = payload.toString(),
+                                status = ActionStatus.PROPOSED,
+                                associatedProjectId = match?.id,
+                                createdAt = now
+                            )
+                        )
+                    }
+                }
+            }
             else -> Result.Dropped("Aura doesn't support \"${call.name.take(40)}\"")
         }
     }
@@ -161,4 +194,19 @@ object CloudProposals {
 
     private fun milestonePayload(title: String, projectId: Long?, projectTitle: String) = JSONObject()
         .put("title", title).put("projectId", projectId ?: JSONObject.NULL).put("projectTitle", projectTitle).toString()
+
+    /** The due date on a to-do card (day number), or null. */
+    fun dueOf(action: TaskActionEntity): Long? {
+        val p = runCatching { JSONObject(action.payloadJson) }.getOrNull() ?: return null
+        if (!p.has("dueDate") || p.isNull("dueDate")) return null
+        return runCatching { TodoRules.parseDue(p.optString("dueDate")) }.getOrNull()
+    }
+
+    /** Sets or clears the due date on a to-do card. */
+    fun withDue(action: TaskActionEntity, dueEpochDay: Long?): TaskActionEntity {
+        if (action.actionType != ActionType.CREATE_TODO) return action
+        val p = runCatching { JSONObject(action.payloadJson) }.getOrElse { JSONObject() }
+        p.put("dueDate", dueEpochDay?.let { TodoRules.formatDue(it) } ?: JSONObject.NULL)
+        return action.copy(payloadJson = p.toString())
+    }
 }

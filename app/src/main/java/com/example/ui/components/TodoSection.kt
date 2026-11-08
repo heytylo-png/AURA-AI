@@ -230,12 +230,14 @@ fun TodoEditorDialog(
     initial: TodoEntity?,
     projects: List<ProjectEntity>,
     onSave: (title: String, notes: String, dueEpochDay: Long?, projectId: Long?) -> Boolean,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** For a new to-do: the project to pre-select. */
+    presetProjectId: Long? = null
 ) {
     var title by remember { mutableStateOf(initial?.title ?: "") }
     var notes by remember { mutableStateOf(initial?.notes ?: "") }
     var due by remember { mutableStateOf(initial?.dueEpochDay) }
-    var projectId by remember { mutableStateOf(initial?.projectId) }
+    var projectId by remember { mutableStateOf(initial?.projectId ?: presetProjectId) }
     var pickingDate by remember { mutableStateOf(false) }
     var pickingProject by remember { mutableStateOf(false) }
     val valid = TodoRules.clean(title, notes) != null

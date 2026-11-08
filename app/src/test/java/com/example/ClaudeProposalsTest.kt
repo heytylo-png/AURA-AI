@@ -98,6 +98,45 @@ class ClaudeProposalsTest {
     }
 
     @Test
+    fun todoProposalBecomesACardWithDateAndProject() {
+        val a = card(
+            ToolCall("propose_add_todo", json("title" to " Walk dogs ", "notes" to "Both of them", "due_date" to "2026-11-09", "project_title" to "garden", "reason" to "You asked")),
+            listOf(garden)
+        )
+        assertEquals(ActionType.CREATE_TODO, a.actionType)
+        assertEquals("Walk dogs", a.description)
+        assertEquals(7L, a.associatedProjectId)
+        val p = JSONObject(a.payloadJson)
+        assertEquals("Both of them", p.getString("notes"))
+        assertEquals("2026-11-09", p.getString("dueDate"))
+        assertEquals("claude", p.getString("origin"))
+        assertEquals(com.example.data.model.TodoRules.parseDue("2026-11-09"), CloudProposals.dueOf(a))
+    }
+
+    @Test
+    fun todoProposalWithoutOptionalsAndBadOnes() {
+        val plain = card(ToolCall("propose_add_todo", json("title" to "Walk dogs", "reason" to "")))
+        assertNull(plain.associatedProjectId)
+        assertNull(CloudProposals.dueOf(plain))
+        assertTrue(dropped(ToolCall("propose_add_todo", json("title" to "Walk dogs", "due_date" to "2026-02-30"))).problem.contains("isn't a real date"))
+        assertTrue(dropped(ToolCall("propose_add_todo", json("title" to " "))).problem.contains("title"))
+        assertTrue(dropped(ToolCall("propose_add_todo", json("title" to "x".repeat(201)))).problem.contains("too long"))
+    }
+
+    @Test
+    fun todoCardEditsKeepClaudeAsTheOriginAndCanChangeTheDate() {
+        val a = card(ToolCall("propose_add_todo", json("title" to "Walk dogs", "due_date" to "2026-11-09")))
+        val edited = CloudProposals.withEdits(a, "Walk both dogs", "evening", projectId = null)!!
+        val moved = CloudProposals.withDue(edited, com.example.data.model.TodoRules.parseDue("2026-11-10"))
+        val p = JSONObject(moved.payloadJson)
+        assertEquals("Walk both dogs", p.getString("title"))
+        assertEquals("evening", p.getString("notes"))
+        assertEquals("2026-11-10", p.getString("dueDate"))
+        assertEquals("claude", p.getString("origin"))
+        assertTrue(JSONObject(CloudProposals.withDue(moved, null).payloadJson).isNull("dueDate"))
+    }
+
+    @Test
     fun relayAndAppAgreeOnMemoryCategories() {
         val relay = listOf(File("../relay/src/index.js"), File("relay/src/index.js")).first { it.exists() }.readText()
         val line = Regex("""MEMORY_CATEGORIES = \[(.*?)]""").find(relay)!!.groupValues[1]
