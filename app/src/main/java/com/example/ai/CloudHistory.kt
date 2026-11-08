@@ -1,8 +1,10 @@
 package com.example.ai
 
+import com.example.data.model.ActionStatus
 import com.example.data.model.AiModelUsed
 import com.example.data.model.ChatMessageEntity
 import com.example.data.model.Sender
+import com.example.data.model.TaskActionEntity
 
 /** One turn of a conversation sent to a cloud model. */
 data class ChatTurn(val role: Role, val text: String) {
@@ -27,7 +29,9 @@ object CloudHistory {
     fun fromMessages(
         messages: List<ChatMessageEntity>,
         maxExchanges: Int = MAX_EXCHANGES,
-        maxChars: Int = MAX_CHARS
+        maxChars: Int = MAX_CHARS,
+        /** Actions linked to replies (by id), so Claude learns what happened to its proposals. */
+        actions: Map<Long, TaskActionEntity> = emptyMap()
     ): List<ChatTurn> {
         val exchanges = mutableListOf<Pair<String, String>>()
         for (i in 0 until messages.size - 1) {
@@ -36,7 +40,8 @@ object CloudHistory {
             if (user.sender == Sender.USER && user.text.isNotBlank() &&
                 reply.sender == Sender.AI && reply.modelUsed == AiModelUsed.CLOUD && reply.text.isNotBlank()
             ) {
-                exchanges += user.text to reply.text
+                val note = reply.proposedActionId?.let { actions[it] }?.let { outcomeNote(it) }
+                exchanges += user.text to (if (note == null) reply.text else "${reply.text}\n\n$note")
             }
         }
 
@@ -52,5 +57,18 @@ object CloudHistory {
         return kept.flatMap { (user, assistant) ->
             listOf(ChatTurn(ChatTurn.Role.USER, user), ChatTurn(ChatTurn.Role.ASSISTANT, assistant))
         }
+    }
+
+    /** What happened to a proposal, told to Claude so it never assumes a change was made. */
+    fun outcomeNote(action: TaskActionEntity): String {
+        val what = "${action.title.lowercase()} \"${action.description.take(80)}\""
+        val outcome = when (action.status) {
+            ActionStatus.PROPOSED -> "the user hasn't decided yet"
+            ActionStatus.EXECUTING -> "it is being saved"
+            ActionStatus.APPROVED_EXECUTED -> "the user approved it and it was saved"
+            ActionStatus.FAILED -> "the user approved it but saving failed, so nothing was saved"
+            ActionStatus.DISMISSED -> "the user dismissed it; nothing was changed"
+        }
+        return "[Aura: you proposed to $what; $outcome.]"
     }
 }

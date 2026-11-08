@@ -27,6 +27,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import com.example.data.model.ProjectEntity
+import com.example.data.model.ActionType
+import com.example.ai.CloudProposals
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,17 +54,31 @@ fun ActionProposalCard(
     action: TaskActionEntity,
     onApprove: (TaskActionEntity) -> Unit,
     onDismiss: (TaskActionEntity) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** The card came from a Claude reply (not Aura's on-phone keyword rules). */
+    proposedByClaude: Boolean = false,
+    /** For "Add milestone": the projects the user can pick from. */
+    projects: List<ProjectEntity> = emptyList(),
+    /** Why approving failed, when known. */
+    failureReason: String? = null
 ) {
     val isPending = action.status == ActionStatus.PROPOSED
     val isExecuted = action.status == ActionStatus.APPROVED_EXECUTED
     // Approve is offered only for action types that can actually run.
     val canExecute = ActionExecutor.isSupported(action.actionType)
 
+    // Editable fields while the action waits for approval: what you approve is exactly what's saved.
+    val editable = isPending && canExecute
+    val initial = remember(action.id) { CloudProposals.editableFields(action) }
+    var primary by remember(action.id) { mutableStateOf(initial.first) }
+    var secondary by remember(action.id) { mutableStateOf(initial.second) }
+    var projectId by remember(action.id) { mutableStateOf(action.associatedProjectId) }
+    val edited = if (editable) CloudProposals.withEdits(action, primary, secondary, projectId) else null
+
     val cardBorder = when (action.status) {
         ActionStatus.PROPOSED -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
         ActionStatus.EXECUTING -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
-        ActionStatus.APPROVED_EXECUTED -> BorderStroke(1.dp, Color(0xFF00E676).copy(alpha = 0.4f))
+        ActionStatus.APPROVED_EXECUTED -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
         ActionStatus.FAILED -> BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
         ActionStatus.DISMISSED -> BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
     }
@@ -95,13 +119,13 @@ fun ActionProposalCard(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = "Executed",
-                            tint = Color(0xFF00E676),
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            text = "Completed",
-                            color = Color(0xFF00E676),
+                            text = "Saved",
+                            color = MaterialTheme.colorScheme.primary,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -119,6 +143,13 @@ fun ActionProposalCard(
                         text = "Running\u2026",
                         color = MaterialTheme.colorScheme.primary,
                         fontSize = 11.sp
+                    )
+                } else if (isPending && proposedByClaude) {
+                    Text(
+                        text = "Proposed by Claude \u00b7 nothing has changed yet",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        modifier = Modifier.testTag("action_proposed_by_claude_${action.id}")
                     )
                 } else if (!isPending) {
                     Text(
@@ -139,13 +170,48 @@ fun ActionProposalCard(
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            if (action.description.isNotBlank() && action.description != action.title) {
+            if (editable && action.actionType in EDITABLE_TYPES) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = primary,
+                    onValueChange = { primary = it },
+                    label = { Text(primaryLabel(action.actionType)) },
+                    modifier = Modifier.fillMaxWidth().testTag("action_edit_primary_${action.id}")
+                )
+                if (action.actionType == ActionType.CREATE_PROJECT) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = secondary,
+                        onValueChange = { secondary = it },
+                        label = { Text("Description") },
+                        modifier = Modifier.fillMaxWidth().testTag("action_edit_secondary_${action.id}")
+                    )
+                }
+                if (action.actionType == ActionType.ADD_MILESTONE) {
+                    Spacer(Modifier.height(6.dp))
+                    ProjectPicker(projects = projects, selectedId = projectId, onPick = { projectId = it }, actionId = action.id)
+                }
+                if (edited == null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = if (action.actionType == ActionType.ADD_MILESTONE && projectId == null) "Pick a project to approve."
+                        else "Check the text: it's empty or too long.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            } else if (action.description.isNotBlank() && action.description != action.title) {
                 Spacer(Modifier.height(3.dp))
                 Text(
                     text = action.description,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            if (action.status == ActionStatus.FAILED && failureReason != null) {
+                Spacer(Modifier.height(8.dp))
+                NoticeBox(MessageNotice.Notice(MessageNotice.Kind.ERROR, "Not saved", failureReason))
             }
 
             // Reasoning notice
@@ -203,7 +269,8 @@ fun ActionProposalCard(
                                 .testTag("action_unavailable_${action.id}")
                         )
                     } else Button(
-                        onClick = { onApprove(action) },
+                        onClick = { edited?.let(onApprove) },
+                        enabled = edited != null,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary
                         ),
@@ -212,12 +279,40 @@ fun ActionProposalCard(
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            text = "Approve & Execute",
+                            text = "Approve",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+private val EDITABLE_TYPES = setOf(ActionType.SAVE_MEMORY, ActionType.CREATE_PROJECT, ActionType.ADD_MILESTONE)
+
+private fun primaryLabel(type: ActionType): String = when (type) {
+    ActionType.SAVE_MEMORY -> "Memory"
+    ActionType.CREATE_PROJECT -> "Project title"
+    ActionType.ADD_MILESTONE -> "Milestone"
+    else -> "Text"
+}
+
+@Composable
+private fun ProjectPicker(projects: List<ProjectEntity>, selectedId: Long?, onPick: (Long) -> Unit, actionId: Long) {
+    var open by remember { mutableStateOf(false) }
+    val selected = projects.firstOrNull { it.id == selectedId }
+    Box {
+        OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().testTag("action_pick_project_$actionId")) {
+            Text(
+                text = selected?.title ?: if (projects.isEmpty()) "No projects yet: create one first" else "Choose a project",
+                fontSize = 13.sp
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            projects.forEach { project ->
+                DropdownMenuItem(text = { Text(project.title) }, onClick = { onPick(project.id); open = false })
             }
         }
     }

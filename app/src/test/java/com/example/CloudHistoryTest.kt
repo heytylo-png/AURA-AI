@@ -60,4 +60,23 @@ class CloudHistoryTest {
     fun emptyChatHasNoHistory() {
         assertTrue(CloudHistory.fromMessages(emptyList()).isEmpty())
     }
+
+    @Test
+    fun claudeIsToldWhatHappenedToItsProposal() {
+        val reply = ai("I've suggested saving that.", AiModelUsed.CLOUD).copy(proposedActionId = 5)
+        val action = com.example.data.model.TaskActionEntity(
+            id = 5, title = "Save memory", description = "Likes tea",
+            actionType = com.example.data.model.ActionType.SAVE_MEMORY, reasoning = "",
+            status = com.example.data.model.ActionStatus.DISMISSED
+        )
+        val history = CloudHistory.fromMessages(listOf(user("remember I like tea"), reply), actions = mapOf(5L to action))
+        assertEquals(
+            "I've suggested saving that.\n\n[Aura: you proposed to save memory \"Likes tea\"; the user dismissed it; nothing was changed.]",
+            history[1].text
+        )
+        val saved = CloudHistory.outcomeNote(action.copy(status = com.example.data.model.ActionStatus.APPROVED_EXECUTED))
+        assertTrue(saved.contains("approved it and it was saved"))
+        val failed = CloudHistory.outcomeNote(action.copy(status = com.example.data.model.ActionStatus.FAILED))
+        assertTrue(failed.contains("nothing was saved"))
+    }
 }

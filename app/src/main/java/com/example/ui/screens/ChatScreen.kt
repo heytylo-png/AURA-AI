@@ -119,6 +119,8 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val activeProject by viewModel.activeProject.collectAsState()
     val routingMode by viewModel.routingMode.collectAsState()
     val taskActions by viewModel.allTaskActions.collectAsState()
+    val projectsForCards by viewModel.allProjects.collectAsState()
+    val actionFailures by viewModel.actionFailures.collectAsState()
     val recentSessions by viewModel.recentSessions.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -315,7 +317,9 @@ fun ChatScreen(viewModel: AuraViewModel) {
                             onSpeakText = { text ->
                                 viewModel.voiceManager.speak(text, identity.voicePitch, identity.voiceSpeed)
                             },
-                            aiName = identity.name
+                            aiName = identity.name,
+                            projects = projectsForCards,
+                            actionFailures = actionFailures
                         )
                     }
 
@@ -659,7 +663,9 @@ fun ChatMessageItem(
     onApproveAction: (com.example.data.model.TaskActionEntity) -> Unit,
     onDismissAction: (com.example.data.model.TaskActionEntity) -> Unit,
     onSpeakText: (String) -> Unit,
-    aiName: String = "Aura"
+    aiName: String = "Aura",
+    projects: List<com.example.data.model.ProjectEntity> = emptyList(),
+    actionFailures: Map<Long, String> = emptyMap()
 ) {
     val isUser = message.sender == Sender.USER
 
@@ -748,7 +754,10 @@ fun ChatMessageItem(
             ActionProposalCard(
                 action = proposedAction,
                 onApprove = onApproveAction,
-                onDismiss = onDismissAction
+                onDismiss = onDismissAction,
+                proposedByClaude = message.modelUsed == AiModelUsed.CLOUD,
+                projects = projects,
+                failureReason = actionFailures[proposedAction.id]
             )
         }
     }

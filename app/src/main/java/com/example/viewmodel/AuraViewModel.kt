@@ -123,6 +123,20 @@ class AuraViewModel @JvmOverloads constructor(
         _sharePersonalContext.value = enabled
     }
 
+    // On by default: Claude may suggest one change per reply (save memory, create project, add
+    // milestone) as an approval card. Nothing happens unless the user approves it.
+    private val _claudeProposals = MutableStateFlow(privacyPrefs.getBoolean("claude_proposals_enabled", true))
+    val claudeProposals: StateFlow<Boolean> = _claudeProposals.asStateFlow()
+
+    fun setClaudeProposals(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("claude_proposals_enabled", enabled).apply()
+        _claudeProposals.value = enabled
+    }
+
+    // Why an approved action failed, shown on its card (kept for this session).
+    private val _actionFailures = MutableStateFlow<Map<Long, String>>(emptyMap())
+    val actionFailures: StateFlow<Map<Long, String>> = _actionFailures.asStateFlow()
+
     // Claude relay access: anonymous Firebase sign-in gives this install an "access ID",
     // which must be added to the relay's allowlist (AURA_ALLOWED_UIDS) before Claude answers.
     private val relayAuth = FirebaseRelayAuth()
@@ -361,9 +375,10 @@ class AuraViewModel @JvmOverloads constructor(
 
             // Earlier Claude exchanges in this chat, read before the new message is saved.
             // Only used if this message goes to the cloud.
-            val cloudHistory = CloudHistory.fromMessages(
-                chatRepository.getMessagesForSession(currentSessionId).first()
-            )
+            val earlier = chatRepository.getMessagesForSession(currentSessionId).first()
+            val linkedActions = earlier.mapNotNull { it.proposedActionId }.distinct()
+                .mapNotNull { taskActionDao.getActionById(it) }.associateBy { it.id }
+            val cloudHistory = CloudHistory.fromMessages(earlier, actions = linkedActions)
 
             // 1. Insert User Message
             val userMsg = ChatMessageEntity(
@@ -397,7 +412,8 @@ class AuraViewModel @JvmOverloads constructor(
                 userSettings = userSettings.value,
                 allowCloudRequest = cloudChatEnabled.value,
                 history = cloudHistory,
-                sharePersonalContext = sharePersonalContext.value
+                sharePersonalContext = sharePersonalContext.value,
+                allowProposals = claudeProposals.value
             ).collect { state ->
                 when (state) {
                     is HybridAiState.Starting -> {}
@@ -455,11 +471,23 @@ class AuraViewModel @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Runs an approved action. If the card's version differs from the stored one (the user edited
+     * its fields), the edit is saved first, and only while the action is still waiting for approval.
+     */
     fun approveAction(action: TaskActionEntity) {
         viewModelScope.launch {
+            val current = taskActionDao.getActionById(action.id) ?: return@launch
+            if (current.status != com.example.data.model.ActionStatus.PROPOSED) return@launch
+            if (action != current) {
+                taskActionDao.updateAction(action.copy(status = current.status, createdAt = current.createdAt))
+            }
             // The executor records APPROVED_EXECUTED only when the operation succeeds, FAILED otherwise,
             // and refuses to run an action that is no longer PROPOSED (double tap, second screen).
-            actionExecutor.execute(action.id)
+            val result = actionExecutor.execute(action.id)
+            if (result is com.example.actions.ActionResult.Failed) {
+                _actionFailures.value = _actionFailures.value + (action.id to result.reason)
+            }
         }
     }
 
