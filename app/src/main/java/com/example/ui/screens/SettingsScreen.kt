@@ -384,6 +384,31 @@ fun SettingsScreen(
                         )
                     }
 
+                    val shareTodos by viewModel.shareTodos.collectAsState()
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Share open to-dos with Claude", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "Sends the titles and due dates of up to 30 open to-dos so Claude can help you plan. Notes, finished to-dos and projects stay on this phone.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = shareTodos,
+                            onCheckedChange = viewModel::setShareTodos,
+                            enabled = cloudChatEnabled,
+                            colors = auraSwitchColors(),
+                            modifier = Modifier.testTag("share_todos_switch")
+                        )
+                    }
+
                     // Claude relay access ID: the owner adds it to the relay's allowlist once.
                     val relayAccessId by viewModel.relayAccessId.collectAsState()
                     val relayAccessStatus by viewModel.relayAccessStatus.collectAsState()

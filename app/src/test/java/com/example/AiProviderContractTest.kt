@@ -421,4 +421,63 @@ class AiProviderContractTest {
         assertTrue(prompt.contains("never say anything was saved, created, scheduled or done"))
         assertFalse(prompt.contains("You cannot take actions or change anything in the app"))
     }
+
+    // ---- Open to-dos: only with their own switch, titles and dates only ----
+
+    @Test
+    fun onlyOpenTodosGoTitlesAndDatesSoonestFirstAtMostThirty() {
+        val t = { id: Long, title: String, due: Long?, done: Boolean, deleted: Long? ->
+            com.example.data.model.TodoEntity(id = id, title = title, notes = "secret note", dueEpochDay = due, projectId = 9, done = done, deletedAt = deleted, createdAt = id)
+        }
+        val shared = com.example.ai.CloudTodos.from(listOf(
+            t(1, "later", 20, false, null), t(2, "soon", 10, false, null), t(3, "undated", null, false, null),
+            t(4, "finished", 5, true, null), t(5, "binned", 5, false, 99)
+        ))
+        assertEquals(listOf("soon", "later", "undated"), shared.map { it.title })
+        assertEquals("1970-01-11", shared[0].dueDate)
+        assertNull(shared[2].dueDate)
+        val many = com.example.ai.CloudTodos.from((1L..40L).map { t(it, "t$it", null, false, null) })
+        assertEquals(30, many.size)
+    }
+
+    @Test
+    fun routerSendsSharedTodosAndSaysSo() {
+        val provider = FakeProvider()
+        val todos = listOf(com.example.ai.CloudTodo("Walk dogs", "2026-11-09"), com.example.ai.CloudTodo("Buy soil", null))
+        val result = runBlocking {
+            engine(provider).processHybridRequest(
+                prompt = "Please analyze this complex topic in detail",
+                mode = HybridRoutingMode.FORCE_CLOUD,
+                identity = com.example.data.model.AiIdentityConfig(),
+                activeMemories = emptyList(),
+                projects = emptyList(),
+                allowCloudRequest = true,
+                sharedTodos = todos
+            ).toList()
+        }
+        assertEquals(todos, requireNotNull(provider.receivedRequest).openTodos)
+        assertTrue(completed(result).reasoningRationale.contains("2 open to-dos (titles and due dates)"))
+    }
+
+    @Test
+    fun noTodosAreSentUnlessShared() {
+        val provider = FakeProvider()
+        completed(run(engine(provider), HybridRoutingMode.FORCE_CLOUD))
+        assertTrue(requireNotNull(provider.receivedRequest).openTodos.isEmpty())
+    }
+
+    @Test
+    fun promptListsSharedTodosAsData() {
+        val prompt = com.example.ai.AuraPrompt.system(
+            com.example.data.model.AiIdentityConfig(), proposalsEnabled = true,
+            openTodos = listOf(com.example.ai.CloudTodo("Walk dogs", "2026-11-09"))
+        )
+        assertTrue(prompt.contains("[USER'S OPEN TO-DOS"))
+        assertTrue(prompt.contains("- Walk dogs (due 2026-11-09)"))
+        assertTrue(prompt.contains("cannot see the user's projects, finished to-dos, or to-do notes"))
+        assertFalse(prompt.contains("You can see only this conversation"))
+        val without = com.example.ai.AuraPrompt.system(com.example.data.model.AiIdentityConfig(), proposalsEnabled = true)
+        assertFalse(without.contains("OPEN TO-DOS"))
+        assertTrue(without.contains("existing to-dos or projects"))
+    }
 }

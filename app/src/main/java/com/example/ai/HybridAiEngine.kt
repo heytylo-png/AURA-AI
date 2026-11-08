@@ -81,7 +81,9 @@ class HybridAiEngine(
         /** The user's "share with Claude" switch: profile + memories they marked. Off = nothing personal. */
         sharePersonalContext: Boolean = false,
         /** The user's "Let Claude propose changes" switch: Claude may suggest one change per reply as a card. */
-        allowProposals: Boolean = false
+        allowProposals: Boolean = false,
+        /** Open to-dos to share, already chosen by the user's "Share open to-dos" switch (empty = off). */
+        sharedTodos: List<CloudTodo> = emptyList()
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
@@ -149,7 +151,7 @@ class HybridAiEngine(
             userSettings = userSettings,
             history = history,
             allowProposals = allowProposals
-        ).forCloud(sharePersonalContext)
+        ).forCloud(sharePersonalContext).copy(openTodos = sharedTodos.take(CloudTodos.MAX))
 
         var streamedText = ""
         var failure: String? = null
@@ -245,6 +247,10 @@ class HybridAiEngine(
             val n = sent.activeMemories.size
             if (n > 0) parts += "$n memor${if (n == 1) "y" else "ies"} you marked to share"
             if (sent.userSettings != null) parts += "your name and main interest"
+        }
+        if (sent.openTodos.isNotEmpty()) {
+            val n = sent.openTodos.size
+            parts += "$n open to-do${if (n == 1) "" else "s"} (titles and due dates)"
         }
         val notSent = if (sent.allowPersonalContext)
             "Not sent: memories you didn't mark, projects, custom directives."

@@ -20,8 +20,24 @@ data class AiProviderRequest(
     /** Earlier turns of this conversation, oldest first; see [CloudHistory]. */
     val history: List<ChatTurn> = emptyList(),
     /** Let Claude propose changes (save memory, create project, add milestone) as approval cards. */
-    val allowProposals: Boolean = false
+    val allowProposals: Boolean = false,
+    /** Open to-dos the user chose to share: titles and due dates only (see [CloudTodos]). */
+    val openTodos: List<CloudTodo> = emptyList()
 )
+
+/** What Claude may see of one open to-do. Notes, project and history never leave the phone. */
+data class CloudTodo(val title: String, val dueDate: String?)
+
+object CloudTodos {
+    const val MAX = 30
+
+    /** Open, non-deleted to-dos, soonest due first (undated last), at most [MAX], titles and dates only. */
+    fun from(todos: List<com.example.data.model.TodoEntity>): List<CloudTodo> = todos
+        .filter { !it.done && it.deletedAt == null }
+        .sortedWith(com.example.data.model.TodoRules.openOrder)
+        .take(MAX)
+        .map { CloudTodo(it.title, it.dueEpochDay?.let { d -> com.example.data.model.TodoRules.formatDue(d) }) }
+}
 
 sealed interface AiProviderEvent {
     data class Content(val text: String) : AiProviderEvent

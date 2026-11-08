@@ -19,6 +19,9 @@ interface TodoDao {
     @Query("SELECT COUNT(*) FROM todos WHERE deletedAt IS NULL AND done = 0")
     fun observeOpenCount(): Flow<Int>
 
+    @Query("SELECT * FROM todos WHERE deletedAt IS NULL AND done = 0")
+    suspend fun getOpen(): List<TodoEntity>
+
     @Query("SELECT * FROM todos WHERE id = :id")
     suspend fun getById(id: Long): TodoEntity?
 
