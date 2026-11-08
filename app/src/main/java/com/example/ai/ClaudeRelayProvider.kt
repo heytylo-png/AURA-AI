@@ -60,9 +60,13 @@ class ClaudeRelayProvider(
         val body = JSONObject()
             .put(
                 "system",
-                AuraPrompt.system(request.identity, request.activeMemories, request.currentProject, request.userSettings)
+                AuraPrompt.system(
+                    request.identity, request.activeMemories, request.currentProject, request.userSettings,
+                    proposalsEnabled = request.allowProposals
+                )
             )
             .put("messages", messagesJson(request))
+            .apply { if (request.allowProposals) put("actions", true) }
             .toString()
 
         val startedAt = clock()
@@ -101,6 +105,11 @@ class ClaudeRelayProvider(
                 return@flow
             }
             val text = StringBuilder()
+            // At most one proposal per reply (the relay disables parallel tool use); later ones are ignored.
+            var toolIndex: Int? = null
+            var toolName: String? = null
+            val toolInput = StringBuilder()
+            var toolCall: ToolCall? = null
             while (true) {
                 currentCoroutineContext().ensureActive()
                 val line = try {
@@ -122,11 +131,20 @@ class ClaudeRelayProvider(
                         emit(AiProviderEvent.Error("Claude stopped with an error: ${event.message}"))
                         return@flow
                     }
+                    is SseEvent.ToolStart -> if (toolIndex == null && toolCall == null) {
+                        toolIndex = event.index
+                        toolName = event.name
+                    }
+                    is SseEvent.ToolInput -> if (event.index == toolIndex) toolInput.append(event.partialJson)
+                    is SseEvent.BlockStop -> if (event.index == toolIndex) {
+                        toolCall = ToolCall(toolName.orEmpty(), toolInput.toString())
+                        toolIndex = null
+                    }
                     SseEvent.Stop -> {
-                        if (text.isBlank()) {
+                        if (text.isBlank() && toolCall == null) {
                             emit(AiProviderEvent.Error("Claude returned an empty reply."))
                         } else {
-                            emit(AiProviderEvent.Completed(text.toString(), clock() - startedAt))
+                            emit(AiProviderEvent.Completed(text.toString(), clock() - startedAt, toolCall = toolCall))
                         }
                         return@flow
                     }
@@ -161,6 +179,9 @@ class ClaudeRelayProvider(
     sealed interface SseEvent {
         data class TextDelta(val text: String) : SseEvent
         data class Error(val message: String) : SseEvent
+        data class ToolStart(val index: Int, val name: String) : SseEvent
+        data class ToolInput(val index: Int, val partialJson: String) : SseEvent
+        data class BlockStop(val index: Int) : SseEvent
         data object Stop : SseEvent
     }
 
@@ -205,11 +226,20 @@ class ClaudeRelayProvider(
         fun parseSseLine(line: String): SseEvent? {
             if (!line.startsWith("data:")) return null
             val obj = runCatching { JSONObject(line.removePrefix("data:").trim()) }.getOrNull() ?: return null
+            val index = obj.optInt("index", -1)
             return when (obj.optString("type")) {
-                "content_block_delta" -> obj.optJSONObject("delta")
-                    ?.takeIf { it.optString("type") == "text_delta" }
-                    ?.optString("text")
-                    ?.let { SseEvent.TextDelta(it) }
+                "content_block_start" -> obj.optJSONObject("content_block")
+                    ?.takeIf { it.optString("type") == "tool_use" }
+                    ?.let { SseEvent.ToolStart(index, it.optString("name")) }
+                "content_block_delta" -> {
+                    val delta = obj.optJSONObject("delta")
+                    when (delta?.optString("type")) {
+                        "text_delta" -> SseEvent.TextDelta(delta.optString("text"))
+                        "input_json_delta" -> SseEvent.ToolInput(index, delta.optString("partial_json"))
+                        else -> null
+                    }
+                }
+                "content_block_stop" -> SseEvent.BlockStop(index)
                 "message_stop" -> SseEvent.Stop
                 "error" -> SseEvent.Error(obj.optJSONObject("error")?.optString("message")?.ifBlank { null } ?: "unknown error")
                 else -> null

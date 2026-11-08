@@ -413,4 +413,12 @@ class AiProviderContractTest {
         assertFalse(prompt.contains("private fact"))
         assertFalse(prompt.contains("Secret project"))
     }
+
+    @Test
+    fun proposalInstructionsNeverAllowClaimingSuccess() {
+        val prompt = com.example.ai.AuraPrompt.system(com.example.data.model.AiIdentityConfig(), proposalsEnabled = true)
+        assertTrue(prompt.contains("You can PROPOSE exactly three changes"))
+        assertTrue(prompt.contains("never say anything was saved, created, scheduled or done"))
+        assertFalse(prompt.contains("You cannot take actions or change anything in the app"))
+    }
 }

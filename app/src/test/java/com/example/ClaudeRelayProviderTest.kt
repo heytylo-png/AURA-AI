@@ -182,4 +182,46 @@ class ClaudeRelayProviderTest {
         assertEquals("user", messages.getJSONObject(2).getString("role"))
         assertEquals("Hello Claude", messages.getJSONObject(2).getString("content"))
     }
+
+    private fun toolEvents(name: String, vararg parts: String): Array<String> {
+        val start = JSONObject().put("type", "content_block_start").put("index", 1)
+            .put("content_block", JSONObject().put("type", "tool_use").put("id", "t1").put("name", name).put("input", JSONObject()))
+        val deltas = parts.map {
+            JSONObject().put("type", "content_block_delta").put("index", 1)
+                .put("delta", JSONObject().put("type", "input_json_delta").put("partial_json", it)).toString()
+        }
+        val stop = JSONObject().put("type", "content_block_stop").put("index", 1)
+        return arrayOf(start.toString(), *deltas.toTypedArray(), stop.toString())
+    }
+
+    @Test
+    fun `a proposal in the stream is returned with the reply`() = runBlocking {
+        server.enqueue(sse(delta("I've suggested saving that."), *toolEvents("propose_save_memory", "{\"text\":\"Likes", " tea\"}"), """{"type":"message_stop"}"""))
+
+        val done = provider().generateStream(request.copy(allowProposals = true)).toList().last() as AiProviderEvent.Completed
+
+        assertEquals("I've suggested saving that.", done.fullText)
+        assertEquals("propose_save_memory", done.toolCall?.name)
+        assertEquals("Likes tea", JSONObject(done.toolCall!!.inputJson).getString("text"))
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertEquals(true, body.getBoolean("actions"))
+        assertTrue(body.getString("system").contains("You can PROPOSE"))
+    }
+
+    @Test
+    fun `a reply that is only a proposal still completes`() = runBlocking {
+        server.enqueue(sse(*toolEvents("propose_create_project", "{\"title\":\"Garden\"}"), """{"type":"message_stop"}"""))
+        val done = provider().generateStream(request.copy(allowProposals = true)).toList().last() as AiProviderEvent.Completed
+        assertEquals("", done.fullText)
+        assertEquals("propose_create_project", done.toolCall?.name)
+    }
+
+    @Test
+    fun `without proposals the app does not ask for tools`() = runBlocking {
+        server.enqueue(sse(delta("ok"), """{"type":"message_stop"}"""))
+        provider().generateStream(request).toList()
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertTrue(!body.has("actions"))
+        assertTrue(body.getString("system").contains("You cannot take actions"))
+    }
 }

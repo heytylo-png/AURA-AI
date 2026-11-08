@@ -18,13 +18,21 @@ data class AiProviderRequest(
     val userSettings: UserSettingsEntity? = null,
     val allowPersonalContext: Boolean = false,
     /** Earlier turns of this conversation, oldest first; see [CloudHistory]. */
-    val history: List<ChatTurn> = emptyList()
+    val history: List<ChatTurn> = emptyList(),
+    /** Let Claude propose changes (save memory, create project, add milestone) as approval cards. */
+    val allowProposals: Boolean = false
 )
 
 sealed interface AiProviderEvent {
     data class Content(val text: String) : AiProviderEvent
     /** [modelName] is the model that actually answered, shown to the user (e.g. after a fallback). */
-    data class Completed(val fullText: String, val latencyMs: Long, val modelName: String? = null) : AiProviderEvent
+    data class Completed(
+        val fullText: String,
+        val latencyMs: Long,
+        val modelName: String? = null,
+        /** A change Claude proposed with a tool in this reply; becomes an approval card after checks. */
+        val toolCall: ToolCall? = null
+    ) : AiProviderEvent
     data class Error(val message: String) : AiProviderEvent
 }
 

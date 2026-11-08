@@ -79,7 +79,9 @@ class HybridAiEngine(
         /** Earlier cloud exchanges of this conversation (see [CloudHistory]); sent only to the cloud. */
         history: List<ChatTurn> = emptyList(),
         /** The user's "share with Claude" switch: profile + memories they marked. Off = nothing personal. */
-        sharePersonalContext: Boolean = false
+        sharePersonalContext: Boolean = false,
+        /** The user's "Let Claude propose changes" switch: Claude may suggest one change per reply as a card. */
+        allowProposals: Boolean = false
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
@@ -145,7 +147,8 @@ class HybridAiEngine(
             activeMemories = activeMemories,
             currentProject = currentProject,
             userSettings = userSettings,
-            history = history
+            history = history,
+            allowProposals = allowProposals
         ).forCloud(sharePersonalContext)
 
         var streamedText = ""
@@ -173,15 +176,25 @@ class HybridAiEngine(
         val done = completed
         when {
             done != null -> {
-                // No keyword-scanned action cards under a cloud reply (audit SEC-07 / FB-06):
-                // Claude doesn't know about them and may tell the user the opposite.
+                // Never keyword-scanned cards under a cloud reply (audit SEC-07 / FB-06). The only card is
+                // one Claude itself proposed with a relay tool, after every field passed the phone's checks.
+                val proposal = done.toolCall?.takeIf { allowProposals }?.let { CloudProposals.toAction(it, projects) }
+                val card = (proposal as? CloudProposals.Result.Card)?.action
+                val dropped = (proposal as? CloudProposals.Result.Dropped)?.let {
+                    " Claude suggested a change, but it was not shown because ${it.problem}."
+                }.orEmpty()
+                val text = done.fullText.ifBlank {
+                    if (card != null) "I've suggested a change below. Nothing happens unless you approve it."
+                    else "Claude suggested a change that Aura couldn't show."
+                }
                 emit(
                     HybridAiState.Completed(
-                        fullText = done.fullText,
+                        fullText = text,
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
-                        reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " + sentSummary(history, providerRequest),
-                        proposedAction = null
+                        reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " +
+                            sentSummary(history, providerRequest) + dropped,
+                        proposedAction = card
                     )
                 )
             }

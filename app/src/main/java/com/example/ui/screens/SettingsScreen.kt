@@ -358,6 +358,32 @@ fun SettingsScreen(
                         )
                     }
 
+                    // Claude may suggest changes as approval cards.
+                    val claudeProposals by viewModel.claudeProposals.collectAsState()
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Let Claude propose changes", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "Claude can suggest saving a memory, creating a project or adding a milestone. Each shows as a card; nothing changes unless you tap Approve.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = claudeProposals,
+                            onCheckedChange = viewModel::setClaudeProposals,
+                            enabled = cloudChatEnabled,
+                            colors = auraSwitchColors(),
+                            modifier = Modifier.testTag("claude_proposals_switch")
+                        )
+                    }
+
                     // Claude relay access ID: the owner adds it to the relay's allowlist once.
                     val relayAccessId by viewModel.relayAccessId.collectAsState()
                     val relayAccessStatus by viewModel.relayAccessStatus.collectAsState()

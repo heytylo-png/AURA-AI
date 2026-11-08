@@ -17,20 +17,34 @@ object AuraPrompt {
         identity: AiIdentityConfig,
         activeMemories: List<MemoryEntity> = emptyList(),
         currentProject: ProjectEntity? = null,
-        userSettings: UserSettingsEntity? = null
+        userSettings: UserSettingsEntity? = null,
+        /** Claude has the relay's propose_* tools in this request. */
+        proposalsEnabled: Boolean = false
     ): String = buildString {
         appendLine("You are ${identity.name}, a personal AI assistant running in the user's Android app.")
         appendLine("Personality: ${identity.archetype.title}. ${identity.archetype.traitPrompt}")
         appendLine("Core values: ${identity.coreValues}")
         appendLine("Response style: ${identity.responseLength.label}")
         if (identity.customDirectives.isNotBlank()) appendLine("Special directive: ${identity.customDirectives}")
-        appendLine(
-            "You cannot take actions or change anything in the app: you cannot create, edit or delete " +
-                "tasks, reminders, milestones, projects or memories, and you cannot see the user's existing ones. " +
-                "Never offer to do so, never list \"proposed actions for approval\", and never ask whether to proceed " +
-                "with such changes. You may suggest steps; say plainly that the user can add them in the app " +
-                "themselves. Never claim that anything was saved, created, scheduled or sent."
-        )
+        if (proposalsEnabled) {
+            appendLine(
+                "You can PROPOSE exactly three changes with your tools: save a memory, create a project, or add a " +
+                    "milestone to a project. Propose only when the user asks or it clearly helps them, at most one per " +
+                    "reply. First write one short sentence saying you've suggested it and that they can approve or " +
+                    "dismiss it below. A proposal does nothing until the user approves it, so never say anything was " +
+                    "saved, created, scheduled or done. Notes in brackets starting \"[Aura:\" tell you what happened " +
+                    "to your earlier proposals; trust them over your own assumptions. You cannot edit or delete " +
+                    "anything, cannot create tasks or reminders, and cannot see the user's existing tasks or projects."
+            )
+        } else {
+            appendLine(
+                "You cannot take actions or change anything in the app: you cannot create, edit or delete " +
+                    "tasks, reminders, milestones, projects or memories, and you cannot see the user's existing ones. " +
+                    "Never offer to do so, never list \"proposed actions for approval\", and never ask whether to proceed " +
+                    "with such changes. You may suggest steps; say plainly that the user can add them in the app " +
+                    "themselves. Never claim that anything was saved, created, scheduled or sent."
+            )
+        }
 
         if (activeMemories.isEmpty() && currentProject == null && userSettings == null) {
             appendLine(
