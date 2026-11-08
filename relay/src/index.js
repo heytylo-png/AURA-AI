@@ -25,6 +25,58 @@ const MAX_TOTAL_CHARS = 100_000;
 const MAX_SYSTEM_CHARS = 8_000;
 const CLOCK_SKEW_SECONDS = 60;
 
+// Changes Claude may PROPOSE. Defined here, never taken from the app, so a modified app cannot
+// add tools. They only describe a change; the app shows it as a card and nothing happens until
+// the user taps Approve on the phone.
+export const MEMORY_CATEGORIES = ["PREFERENCE", "FACT", "GOAL", "CONTEXT", "IDENTITY_RULE"];
+const REASON = { type: "string", maxLength: 300, description: "One short sentence: why this helps the user." };
+export const PROPOSAL_TOOLS = [
+  {
+    name: "propose_save_memory",
+    description:
+      "Suggest saving one durable fact or preference the user stated, so Aura remembers it. " +
+      "Only for things the user said about themselves; the user must approve it in the app.",
+    input_schema: {
+      type: "object",
+      properties: {
+        text: { type: "string", minLength: 1, maxLength: 500, description: "The memory, in the user's terms." },
+        category: { type: "string", enum: MEMORY_CATEGORIES },
+        importance: { type: "integer", minimum: 1, maximum: 5 },
+        reason: REASON,
+      },
+      required: ["text", "category", "importance", "reason"],
+    },
+  },
+  {
+    name: "propose_create_project",
+    description: "Suggest creating a project in the user's Project Library. The user must approve it in the app.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 80 },
+        description: { type: "string", maxLength: 1000 },
+        reason: REASON,
+      },
+      required: ["title", "description", "reason"],
+    },
+  },
+  {
+    name: "propose_add_milestone",
+    description:
+      "Suggest adding a milestone to one of the user's projects. You cannot see their projects; use the project " +
+      "name the user gave. The user picks the project and approves it in the app.",
+    input_schema: {
+      type: "object",
+      properties: {
+        project_title: { type: "string", maxLength: 80 },
+        milestone_title: { type: "string", minLength: 1, maxLength: 120 },
+        reason: REASON,
+      },
+      required: ["project_title", "milestone_title", "reason"],
+    },
+  },
+];
+
 export class RelayError extends Error {
   constructor(status, code, message) {
     super(message);
@@ -136,7 +188,11 @@ export function validateChatBody(body) {
   if (clean[0].role !== "user" || clean[clean.length - 1].role !== "user") {
     throw new RelayError(400, "invalid_request", "The conversation must start and end with a user message.");
   }
-  return { system: system || undefined, messages: clean };
+  if (body.actions !== undefined && typeof body.actions !== "boolean") {
+    throw new RelayError(400, "invalid_request", "actions must be true or false.");
+  }
+  // Anything else the app sends (model, tools, max_tokens...) is ignored.
+  return { system: system || undefined, messages: clean, actions: body.actions === true };
 }
 
 export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = {}) {
@@ -188,6 +244,9 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
           max_tokens: Number(env.MAX_OUTPUT_TOKENS) || DEFAULT_MAX_OUTPUT_TOKENS,
           ...(chat.system ? { system: chat.system } : {}),
           messages: chat.messages,
+          ...(chat.actions
+            ? { tools: PROPOSAL_TOOLS, tool_choice: { type: "auto", disable_parallel_tool_use: true } }
+            : {}),
           stream: true,
         }),
       });

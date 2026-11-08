@@ -1,7 +1,7 @@
 // Run with: node --test relay/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, validateChatBody, RelayError } from "../src/index.js";
+import { createHandler, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES } from "../src/index.js";
 
 const PROJECT = "aura-test-project";
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -190,6 +190,45 @@ test("request bodies are validated", () => {
 
   assert.deepEqual(
     validateChatBody({ messages: [{ role: "user", content: "a", extra: 1 }, { role: "assistant", content: "b" }, { role: "user", content: "c" }] }),
-    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }] }
+    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], actions: false }
   );
+  assert.throws(() => validateChatBody({ messages: [{ role: "user", content: "x" }], actions: "yes" }), RelayError);
+});
+
+test("proposal tools are added only when the app asks, and only the relay's own", async () => {
+  const { handle, env, calls } = setup();
+  const upstreamBodies = () =>
+    calls.filter((c) => c.url.startsWith("https://api.anthropic.com")).map((c) => JSON.parse(c.init.body));
+
+  await post(handle, env, { token: await makeToken() });
+  await post(handle, env, {
+    token: await makeToken(),
+    body: { ...chatBody, actions: true, tools: [{ name: "delete_everything", input_schema: { type: "object" } }] },
+  });
+  await post(handle, env, {
+    token: await makeToken(),
+    body: { ...chatBody, tools: [{ name: "delete_everything", input_schema: { type: "object" } }] },
+  });
+
+  const [plain, withActions, sneaky] = upstreamBodies();
+  assert.equal(plain.tools, undefined, "no tools unless asked");
+  assert.deepEqual(
+    withActions.tools.map((t) => t.name),
+    ["propose_save_memory", "propose_create_project", "propose_add_milestone"]
+  );
+  assert.deepEqual(withActions.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+  assert.equal(sneaky.tools, undefined, "tools sent by the app are ignored");
+});
+
+test("proposal tools are tightly bounded", () => {
+  for (const tool of PROPOSAL_TOOLS) {
+    assert.match(tool.name, /^propose_/);
+    assert.ok(tool.input_schema.required.includes("reason"));
+    for (const [name, prop] of Object.entries(tool.input_schema.properties)) {
+      if (prop.type === "string" && !prop.enum) assert.ok(prop.maxLength > 0, `${tool.name}.${name} needs a maxLength`);
+    }
+  }
+  const memory = PROPOSAL_TOOLS.find((t) => t.name === "propose_save_memory");
+  assert.deepEqual(memory.input_schema.properties.category.enum, MEMORY_CATEGORIES);
+  assert.deepEqual(memory.input_schema.properties.importance, { type: "integer", minimum: 1, maximum: 5 });
 });

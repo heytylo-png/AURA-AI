@@ -10,6 +10,10 @@ Anthropic API key inside the (public) APK.
 The model (`claude-sonnet-5-5`) and output limit are fixed in `wrangler.toml`, so the
 app cannot request a different model or very long outputs.
 
+With `"actions": true` in the body, the relay adds its own three `propose_*` tools
+(save memory, create project, add milestone), one per reply. They only describe a change;
+the app shows it as an approval card. Tools sent by the app are ignored.
+
 Tests: `cd relay && node --test` (no packages needed).
 
 Deployment is automatic from `main` via `.github/workflows/relay.yml` once these
