@@ -140,6 +140,16 @@ class AuraViewModel @JvmOverloads constructor(
         _claudeProposals.value = enabled
     }
 
+    // Off by default: Claude sees titles and due dates of up to 30 open to-dos. Notes, finished
+    // to-dos and projects stay on the phone.
+    private val _shareTodos = MutableStateFlow(privacyPrefs.getBoolean("share_open_todos", false))
+    val shareTodos: StateFlow<Boolean> = _shareTodos.asStateFlow()
+
+    fun setShareTodos(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("share_open_todos", enabled).apply()
+        _shareTodos.value = enabled
+    }
+
     // Why an approved action failed, shown on its card (kept for this session).
     private val _actionFailures = MutableStateFlow<Map<Long, String>>(emptyMap())
     val actionFailures: StateFlow<Map<Long, String>> = _actionFailures.asStateFlow()
@@ -464,7 +474,8 @@ class AuraViewModel @JvmOverloads constructor(
                 allowCloudRequest = cloudChatEnabled.value,
                 history = cloudHistory,
                 sharePersonalContext = sharePersonalContext.value,
-                allowProposals = claudeProposals.value
+                allowProposals = claudeProposals.value,
+                sharedTodos = if (shareTodos.value) com.example.ai.CloudTodos.from(todoDao.getOpen()) else emptyList()
             ).collect { state ->
                 when (state) {
                     is HybridAiState.Starting -> {}
