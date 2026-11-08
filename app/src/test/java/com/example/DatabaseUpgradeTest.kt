@@ -88,6 +88,7 @@ class DatabaseUpgradeTest {
                 val messages = db.chatMessageDao().getMessagesForSession(1).first()
                 assertEquals(listOf("Hi Starai", "Hello!"), messages.map { it.text })
                 assertEquals(AiModelUsed.CLOUD, messages[1].modelUsed)
+                assertEquals("the to-do list starts empty", 0, db.todoDao().observeOpenCount().first())
             } finally {
                 db.close()
             }

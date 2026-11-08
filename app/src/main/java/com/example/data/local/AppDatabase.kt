@@ -15,6 +15,7 @@ import com.example.data.model.ProjectArtifactEntity
 import com.example.data.model.ProjectEntity
 import com.example.data.model.TaskActionEntity
 import com.example.data.model.UserSettingsEntity
+import com.example.data.model.TodoEntity
 
 /**
  * Current schema version. Raising it REQUIRES, in the same change:
@@ -22,7 +23,7 @@ import com.example.data.model.UserSettingsEntity
  *  2. the new schema file committed under app/schemas/ (written by the build),
  * DatabaseUpgradeTest fails until both exist.
  */
-const val DATABASE_VERSION = 6
+const val DATABASE_VERSION = 7
 
 @Database(
     entities = [
@@ -33,7 +34,8 @@ const val DATABASE_VERSION = 6
         TaskActionEntity::class,
         ChatMessageEntity::class,
         ChatSessionEntity::class,
-        UserSettingsEntity::class
+        UserSettingsEntity::class,
+        TodoEntity::class
     ],
     version = DATABASE_VERSION,
     // Room writes the schema of every version to app/schemas/ (committed to git), so
@@ -47,6 +49,7 @@ abstract class AppDatabase : RoomDatabase() {
      * Data Access Object for persisting and querying active and contextual user memories.
      */
     abstract fun memoryDao(): MemoryDao
+    abstract fun todoDao(): TodoDao
 
     /**
      * Data Access Object for persisting projects, milestones, and knowledge artifacts.
@@ -95,8 +98,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 6 -> 7: new to-do list. Only adds a table; nothing existing changes. */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `todos` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`title` TEXT NOT NULL, `notes` TEXT NOT NULL, `dueEpochDay` INTEGER, `projectId` INTEGER, " +
+                        "`done` INTEGER NOT NULL, `doneAt` INTEGER, `source` TEXT, `createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER, `deletedAt` INTEGER)"
+                )
+            }
+        }
+
         /** Every schema upgrade, in order. */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_4_5, MIGRATION_5_6)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
 
         @Volatile
         private var INSTANCE: AppDatabase? = null
