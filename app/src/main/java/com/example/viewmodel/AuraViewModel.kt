@@ -18,6 +18,12 @@ import com.example.data.model.ChatMessageEntity
 import com.example.data.model.MemoryCategory
 import com.example.data.model.MemoryEntity
 import com.example.data.model.MemorySource
+import com.example.data.model.TodoEntity
+import com.example.data.model.TodoRules
+import com.example.data.model.TodoSource
+import com.example.data.model.movedToDeleted
+import com.example.data.model.restored
+import com.example.data.model.toggledDone
 import com.example.data.model.edited
 import com.example.data.model.MilestoneEntity
 import com.example.data.model.PersonalityArchetype
@@ -66,6 +72,7 @@ class AuraViewModel @JvmOverloads constructor(
 
     private val db = AppDatabase.getInstance(application)
     private val taskActionDao = db.taskActionDao()
+    private val todoDao = db.todoDao()
     private val actionExecutor = ActionExecutor(db)
     private val userSettingsDao = db.userSettingsDao()
 
@@ -269,6 +276,48 @@ class AuraViewModel @JvmOverloads constructor(
         emptyList()
     )
 
+    // ---- To-dos ----
+    val visibleTodos: StateFlow<List<TodoEntity>> = todoDao.observeVisible()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val deletedTodos: StateFlow<List<TodoEntity>> = todoDao.observeDeleted()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val openTodoCount: StateFlow<Int> = todoDao.observeOpenCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    /** Adds a to-do typed by the user. Returns false (and saves nothing) if the text breaks a limit. */
+    fun addTodo(title: String, notes: String, dueEpochDay: Long?, projectId: Long?): Boolean {
+        val (t, n) = TodoRules.clean(title, notes) ?: return false
+        viewModelScope.launch {
+            todoDao.insert(TodoEntity(title = t, notes = n, dueEpochDay = dueEpochDay, projectId = projectId, source = TodoSource.TYPED))
+        }
+        return true
+    }
+
+    fun editTodo(todo: TodoEntity, title: String, notes: String, dueEpochDay: Long?, projectId: Long?): Boolean {
+        val updated = todo.edited(title, notes, dueEpochDay, projectId, System.currentTimeMillis()) ?: return false
+        viewModelScope.launch { todoDao.update(updated) }
+        return true
+    }
+
+    /** Ticks a to-do off, or reopens a finished one. */
+    fun toggleTodoDone(todo: TodoEntity) {
+        viewModelScope.launch { todoDao.update(todo.toggledDone(System.currentTimeMillis())) }
+    }
+
+    /** Moves a to-do to Recently deleted (restorable for 30 days). */
+    fun deleteTodo(todo: TodoEntity) {
+        viewModelScope.launch { todoDao.update(todo.movedToDeleted(System.currentTimeMillis())) }
+    }
+
+    fun restoreTodo(todo: TodoEntity) {
+        viewModelScope.launch { todoDao.update(todo.restored()) }
+    }
+
+    /** Removes a to-do from Recently deleted for good. */
+    fun deleteTodoForever(todo: TodoEntity) {
+        viewModelScope.launch { todoDao.deleteForever(todo.id) }
+    }
+
     // Recent 5 Sessions for Persistent Drawer
     val recentSessions: StateFlow<List<ChatSessionEntity>> = chatRepository.getLastSessions(5)
         .stateIn(
@@ -289,6 +338,8 @@ class AuraViewModel @JvmOverloads constructor(
         seedInitialDataIfNeeded()
         // An action left EXECUTING means the app was killed mid-run; its writes were rolled back.
         viewModelScope.launch { actionExecutor.recoverInterrupted() }
+        // Recently deleted to-dos are kept for 30 days, then removed for good.
+        viewModelScope.launch { todoDao.purgeDeletedBefore(TodoRules.purgeCutoff(System.currentTimeMillis())) }
     }
 
     fun setSelectedTab(tabIndex: Int) {
@@ -579,6 +630,8 @@ class AuraViewModel @JvmOverloads constructor(
                 _activeProject.value = null
             }
             projectRepository.deleteProject(project)
+            // Its to-dos stay, just without a project.
+            todoDao.clearProject(project.id)
         }
     }
 

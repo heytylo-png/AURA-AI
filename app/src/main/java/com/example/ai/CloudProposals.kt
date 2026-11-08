@@ -5,6 +5,7 @@ import com.example.data.model.ActionType
 import com.example.data.model.MemoryCategory
 import com.example.data.model.ProjectEntity
 import com.example.data.model.TaskActionEntity
+import com.example.data.model.TodoRules
 import org.json.JSONObject
 
 /** A tool call Claude made in a reply: the tool's name and its input as JSON text. */
@@ -130,6 +131,12 @@ object CloudProposals {
                     payloadJson = milestonePayload(main, projectId, old.optString("projectTitle"))
                 )
             }
+            ActionType.CREATE_TODO -> {
+                val (title, notes) = TodoRules.clean(main, extra) ?: return null
+                val payload = JSONObject(old.toString())
+                    .put("title", title).put("notes", notes).put("projectId", projectId ?: JSONObject.NULL)
+                action.copy(description = title, associatedProjectId = projectId, payloadJson = payload.toString())
+            }
             else -> null
         }
     }
@@ -141,6 +148,7 @@ object CloudProposals {
             ActionType.SAVE_MEMORY -> p.optString("content", action.description) to ""
             ActionType.CREATE_PROJECT -> p.optString("title", action.description) to p.optString("description")
             ActionType.ADD_MILESTONE -> p.optString("title", action.description) to p.optString("projectTitle")
+            ActionType.CREATE_TODO -> p.optString("title", action.description) to p.optString("notes")
             else -> action.description to ""
         }
     }

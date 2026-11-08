@@ -98,14 +98,32 @@ class ActionExecutorTest {
     }
 
     @Test
-    fun `unimplemented create todo is recorded as failed, never executed`() = runBlocking {
-        val id = insert(ActionType.CREATE_TODO, """{"title":"Buy milk","projectId":null}""")
+    fun `approved create todo saves a to-do`() = runBlocking {
+        val id = insert(ActionType.CREATE_TODO, """{"title":" Buy milk ","notes":"2 litres","dueDate":"2026-11-20","projectId":null}""")
 
         val result = executor.execute(id)
 
-        assertTrue(result is ActionResult.Failed)
-        assertEquals(ActionStatus.FAILED, statusOf(id))
-        assertFalse(ActionExecutor.isSupported(ActionType.CREATE_TODO))
+        assertEquals(ActionResult.Succeeded, result)
+        assertEquals(ActionStatus.APPROVED_EXECUTED, statusOf(id))
+        val todo = db.todoDao().observeVisible().first().single()
+        assertEquals("Buy milk", todo.title)
+        assertEquals("2 litres", todo.notes)
+        assertEquals("2026-11-20", com.example.data.model.TodoRules.formatDue(todo.dueEpochDay!!))
+        assertEquals(com.example.data.model.TodoSource.ON_PHONE_RULE, todo.source)
+        assertTrue(ActionExecutor.isSupported(ActionType.CREATE_TODO))
+    }
+
+    @Test
+    fun `create todo with a bad date or missing project saves nothing`() = runBlocking {
+        val badDate = insert(ActionType.CREATE_TODO, """{"title":"Buy milk","dueDate":"2026-02-30"}""")
+        val noProject = insert(ActionType.CREATE_TODO, """{"title":"Buy milk","projectId":42}""")
+        val blank = insert(ActionType.CREATE_TODO, """{"title":"   "}""")
+
+        for (id in listOf(badDate, noProject, blank)) {
+            assertTrue(executor.execute(id) is ActionResult.Failed)
+            assertEquals(ActionStatus.FAILED, statusOf(id))
+        }
+        assertTrue(db.todoDao().observeVisible().first().isEmpty())
     }
 
     @Test

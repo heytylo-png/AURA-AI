@@ -89,7 +89,7 @@ class LocalModelEngine {
         if (isTaskActionIntent(lower)) {
             val taskDesc = extractTaskContent(cleanPrompt)
             val action = TaskActionEntity(
-                title = "Execute Task: \"${taskDesc.take(40)}\"",
+                title = "Add to-do",
                 description = taskDesc,
                 actionType = ActionType.CREATE_TODO,
                 reasoning = "Aura parsed an actionable to-do item requiring human approval before adding to schedule.",

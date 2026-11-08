@@ -12,6 +12,9 @@ import com.example.data.model.MilestoneEntity
 import com.example.data.model.ProjectEntity
 import com.example.data.model.ProjectStatus
 import com.example.data.model.TaskActionEntity
+import com.example.data.model.TodoSource
+import com.example.data.model.TodoRules
+import com.example.data.model.TodoEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -48,6 +51,7 @@ class ActionExecutor(
     private val taskActionDao = db.taskActionDao()
     private val memoryDao = db.memoryDao()
     private val projectDao = db.projectDao()
+    private val todoDao = db.todoDao()
 
     suspend fun execute(actionId: Long): ActionResult {
         if (taskActionDao.claimForExecution(actionId) == 0) return ActionResult.NotPending
@@ -128,6 +132,27 @@ class ActionExecutor(
                 require(title.isNotEmpty()) { "Milestone title is empty." }
                 projectDao.insertMilestone(MilestoneEntity(projectId = projectId, title = title, isCompleted = false))
             }
+            ActionType.CREATE_TODO -> {
+                val (title, notes) = requireNotNull(
+                    TodoRules.clean(payload.optString("title").ifBlank { action.description }, payload.optString("notes"))
+                ) { "The to-do title is empty or too long." }
+                val due = runCatching { TodoRules.parseDue(payload.optString("dueDate").takeIf { payload.has("dueDate") && !payload.isNull("dueDate") }) }
+                    .getOrElse { throw IllegalArgumentException("The due date isn't a real date.") }
+                val projectId = if (payload.has("projectId") && !payload.isNull("projectId")) payload.getLong("projectId") else action.associatedProjectId
+                if (projectId != null) {
+                    requireNotNull(projectDao.getProjectById(projectId)) { "Project $projectId no longer exists." }
+                }
+                todoDao.insert(
+                    TodoEntity(
+                        title = title,
+                        notes = notes,
+                        dueEpochDay = due,
+                        projectId = projectId,
+                        source = if (payload.optString("origin") == "claude") TodoSource.CHAT_APPROVED else TodoSource.ON_PHONE_RULE,
+                        createdAt = clock()
+                    )
+                )
+            }
             else -> error("${action.actionType.title} is not available yet.")
         }
     }
@@ -135,7 +160,7 @@ class ActionExecutor(
     companion object {
         private const val TAG = "ActionExecutor"
 
-        private val SUPPORTED = setOf(ActionType.SAVE_MEMORY, ActionType.CREATE_PROJECT, ActionType.ADD_MILESTONE)
+        private val SUPPORTED = setOf(ActionType.SAVE_MEMORY, ActionType.CREATE_PROJECT, ActionType.ADD_MILESTONE, ActionType.CREATE_TODO)
 
         /** Whether approving this type can actually do anything. The UI hides Approve otherwise. */
         fun isSupported(type: ActionType): Boolean = type in SUPPORTED

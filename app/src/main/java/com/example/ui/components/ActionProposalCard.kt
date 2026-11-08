@@ -178,12 +178,12 @@ fun ActionProposalCard(
                     label = { Text(primaryLabel(action.actionType)) },
                     modifier = Modifier.fillMaxWidth().testTag("action_edit_primary_${action.id}")
                 )
-                if (action.actionType == ActionType.CREATE_PROJECT) {
+                if (action.actionType == ActionType.CREATE_PROJECT || action.actionType == ActionType.CREATE_TODO) {
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
                         value = secondary,
                         onValueChange = { secondary = it },
-                        label = { Text("Description") },
+                        label = { Text(if (action.actionType == ActionType.CREATE_TODO) "Notes (optional)" else "Description") },
                         modifier = Modifier.fillMaxWidth().testTag("action_edit_secondary_${action.id}")
                     )
                 }
@@ -290,12 +290,13 @@ fun ActionProposalCard(
     }
 }
 
-private val EDITABLE_TYPES = setOf(ActionType.SAVE_MEMORY, ActionType.CREATE_PROJECT, ActionType.ADD_MILESTONE)
+private val EDITABLE_TYPES = setOf(ActionType.SAVE_MEMORY, ActionType.CREATE_PROJECT, ActionType.ADD_MILESTONE, ActionType.CREATE_TODO)
 
 private fun primaryLabel(type: ActionType): String = when (type) {
     ActionType.SAVE_MEMORY -> "Memory"
     ActionType.CREATE_PROJECT -> "Project title"
     ActionType.ADD_MILESTONE -> "Milestone"
+    ActionType.CREATE_TODO -> "To-do"
     else -> "Text"
 }
 
