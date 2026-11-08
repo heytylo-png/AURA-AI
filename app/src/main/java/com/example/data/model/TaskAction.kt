@@ -4,12 +4,13 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 enum class ActionType(val title: String) {
-    CREATE_PROJECT("Create Project"),
-    ADD_MILESTONE("Add Milestone"),
-    SAVE_MEMORY("Store New Memory"),
-    CREATE_TODO("Create Todo Task"),
-    GENERATE_SUMMARY("Generate Project Summary"),
-    UPDATE_PREFERENCE("Update Preference")
+    // Short labels: the card shows this as its badge, so it names the kind of change, nothing more.
+    CREATE_PROJECT("Project"),
+    ADD_MILESTONE("Milestone"),
+    SAVE_MEMORY("Memory"),
+    CREATE_TODO("To-do"),
+    GENERATE_SUMMARY("Project summary"),
+    UPDATE_PREFERENCE("Preference")
 }
 
 // Stored by name (TEXT column), so adding values needs no schema migration.

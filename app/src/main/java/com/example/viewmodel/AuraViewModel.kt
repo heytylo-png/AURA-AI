@@ -440,6 +440,9 @@ class AuraViewModel @JvmOverloads constructor(
             val linkedActions = earlier.mapNotNull { it.proposedActionId }.distinct()
                 .mapNotNull { taskActionDao.getActionById(it) }.associateBy { it.id }
             val cloudHistory = CloudHistory.fromMessages(earlier, actions = linkedActions)
+            val openTodosNow = if (shareTodos.value) todoDao.getOpen() else emptyList()
+            val sharedTodoList = com.example.ai.CloudTodos.from(openTodosNow)
+            val sharedTodoTotal = com.example.ai.CloudTodos.openCount(openTodosNow)
 
             // 1. Insert User Message
             val userMsg = ChatMessageEntity(
@@ -475,7 +478,8 @@ class AuraViewModel @JvmOverloads constructor(
                 history = cloudHistory,
                 sharePersonalContext = sharePersonalContext.value,
                 allowProposals = claudeProposals.value,
-                sharedTodos = if (shareTodos.value) com.example.ai.CloudTodos.from(todoDao.getOpen()) else emptyList()
+                sharedTodos = sharedTodoList,
+                sharedTodosTotal = sharedTodoTotal
             ).collect { state ->
                 when (state) {
                     is HybridAiState.Starting -> {}

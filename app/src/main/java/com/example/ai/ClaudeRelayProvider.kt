@@ -64,7 +64,8 @@ class ClaudeRelayProvider(
                     request.identity, request.activeMemories, request.currentProject, request.userSettings,
                     proposalsEnabled = request.allowProposals,
                     today = if (request.allowProposals || request.openTodos.isNotEmpty()) com.example.data.model.TodoRules.formatDue(com.example.data.model.TodoRules.today()) else null,
-                    openTodos = request.openTodos
+                    openTodos = request.openTodos,
+                    openTodosTotal = request.openTodosTotal
                 )
             )
             .put("messages", messagesJson(request))

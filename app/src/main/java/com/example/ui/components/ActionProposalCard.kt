@@ -165,13 +165,18 @@ fun ActionProposalCard(
 
             Spacer(Modifier.height(8.dp))
 
-            // Action title & description
-            Text(
-                text = action.title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            // Headline. A generic title ("Add to-do") only repeats the badge, so the card leads with
+            // the change itself instead: the editable fields while waiting, the saved text afterwards.
+            val genericTitle = action.title in GENERIC_TITLES
+            val showFields = editable && action.actionType in EDITABLE_TYPES
+            if (!genericTitle || !showFields) {
+                Text(
+                    text = if (genericTitle && action.description.isNotBlank()) action.description else action.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
 
             if (editable && action.actionType in EDITABLE_TYPES) {
                 Spacer(Modifier.height(8.dp))
@@ -214,7 +219,7 @@ fun ActionProposalCard(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-            } else if (action.description.isNotBlank() && action.description != action.title) {
+            } else if (!genericTitle && action.description.isNotBlank() && action.description != action.title) {
                 Spacer(Modifier.height(3.dp))
                 Text(
                     text = action.description,
@@ -375,3 +380,6 @@ private fun TodoCardExtras(
         ) { androidx.compose.material3.DatePicker(state = state) }
     }
 }
+
+/** Titles that only name the kind of change (the badge already does). */
+private val GENERIC_TITLES = setOf("Save memory", "Create project", "Add milestone", "Add to-do")

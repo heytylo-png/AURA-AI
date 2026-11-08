@@ -480,4 +480,34 @@ class AiProviderContractTest {
         assertFalse(without.contains("OPEN TO-DOS"))
         assertTrue(without.contains("existing to-dos or projects"))
     }
+
+    @Test
+    fun claudeIsToldWhetherTheTodoListIsComplete() {
+        val one = listOf(com.example.ai.CloudTodo("Walk dogs", "2026-11-09"))
+        val complete = com.example.ai.AuraPrompt.system(com.example.data.model.AiIdentityConfig(), openTodos = one)
+        assertTrue(complete.contains("This is the user's complete list of open to-dos (1)"))
+        val capped = com.example.ai.AuraPrompt.system(com.example.data.model.AiIdentityConfig(), openTodos = one, openTodosTotal = 42)
+        assertTrue(capped.contains("These are the 1 soonest of the user's 42 open to-dos"))
+        assertFalse(capped.contains("complete list"))
+    }
+
+    @Test
+    fun replyDetailsSayWhenTheTodoListWasCapped() {
+        val provider = FakeProvider()
+        val todos = (1..30).map { com.example.ai.CloudTodo("t$it", null) }
+        val result = runBlocking {
+            engine(provider).processHybridRequest(
+                prompt = "Please analyze this complex topic in detail",
+                mode = HybridRoutingMode.FORCE_CLOUD,
+                identity = com.example.data.model.AiIdentityConfig(),
+                activeMemories = emptyList(),
+                projects = emptyList(),
+                allowCloudRequest = true,
+                sharedTodos = todos,
+                sharedTodosTotal = 42
+            ).toList()
+        }
+        assertEquals(42, requireNotNull(provider.receivedRequest).openTodosTotal)
+        assertTrue(completed(result).reasoningRationale.contains("30 open to-dos of 42"))
+    }
 }
