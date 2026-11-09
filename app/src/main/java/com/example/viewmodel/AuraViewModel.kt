@@ -332,6 +332,7 @@ class AuraViewModel @JvmOverloads constructor(
     val deletedTodos: StateFlow<List<TodoEntity>> = todoDao.observeDeleted()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val openTodoCount: StateFlow<Int> = todoDao.observeOpenCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     // Due-date reminders: one notification at the chosen hour on the due day. Rescheduled
     // whenever to-dos change (added, edited, finished, deleted, restored, approved from chat).
@@ -368,7 +369,6 @@ class AuraViewModel @JvmOverloads constructor(
             }
         }
     }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     /** Adds a to-do typed by the user. Returns false (and saves nothing) if the text breaks a limit. */
     fun addTodo(title: String, notes: String, dueEpochDay: Long?, projectId: Long?): Boolean {
