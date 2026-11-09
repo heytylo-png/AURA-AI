@@ -20,6 +20,7 @@ class MainActivity : ComponentActivity() {
         // Mandatory App Check initialization with launch intent before any UI or Firebase operations
         configureAppCheck(this, intent)
 
+        openRequestedTab(intent)
         enableEdgeToEdge()
 
         setContent {
@@ -27,5 +28,17 @@ class MainActivity : ComponentActivity() {
                 MainScreen(viewModel = auraViewModel)
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openRequestedTab(intent)
+    }
+
+    /** A tapped reminder opens the Tasks tab. Only known tabs are accepted. */
+    private fun openRequestedTab(intent: android.content.Intent?) {
+        val tab = intent?.getIntExtra(com.example.reminders.Reminders.EXTRA_OPEN_TAB, -1) ?: -1
+        if (tab == com.example.reminders.Reminders.TASKS_TAB) auraViewModel.setSelectedTab(tab)
     }
 }

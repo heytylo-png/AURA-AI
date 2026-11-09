@@ -242,6 +242,19 @@ fun TodoEditorDialog(
     var pickingProject by remember { mutableStateOf(false) }
     val valid = TodoRules.clean(title, notes) != null
 
+    // Notification permission is asked the first time a due date is picked, not at app start.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val reminderPrefs = remember { com.example.reminders.ReminderPrefs(context) }
+    var notificationsAllowed by remember { mutableStateOf(com.example.reminders.Reminders.notificationsAllowed(context)) }
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted -> notificationsAllowed = granted }
+    fun askForNotificationsIfNeeded() {
+        if (!notificationsAllowed && reminderPrefs.enabled && android.os.Build.VERSION.SDK_INT >= 33) {
+            permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "New to-do" else "Edit to-do") },
@@ -273,9 +286,15 @@ fun TodoEditorDialog(
                     }
                 }
                 Text(
-                    "A due date is shown in the list; Aura doesn't send reminders yet.",
+                    text = when {
+                        due == null -> "Add a due date to get a reminder that day."
+                        !reminderPrefs.enabled -> "Reminders are off in Settings."
+                        !notificationsAllowed -> "Reminders are off: notifications aren't allowed for Aura. You can allow them in the phone's app settings."
+                        else -> "You'll get a reminder at ${com.example.reminders.ReminderPlan.hourLabel(reminderPrefs.hour)} on the due day."
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("todo_reminder_note")
                 )
             }
         },
@@ -294,7 +313,7 @@ fun TodoEditorDialog(
             onDismissRequest = { pickingDate = false },
             confirmButton = {
                 TextButton(onClick = {
-                    state.selectedDateMillis?.let { due = Math.floorDiv(it, DAY_MS) }
+                    state.selectedDateMillis?.let { due = Math.floorDiv(it, DAY_MS); askForNotificationsIfNeeded() }
                     pickingDate = false
                 }) { Text("OK") }
             },

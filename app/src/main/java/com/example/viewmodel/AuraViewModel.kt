@@ -332,6 +332,42 @@ class AuraViewModel @JvmOverloads constructor(
     val deletedTodos: StateFlow<List<TodoEntity>> = todoDao.observeDeleted()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val openTodoCount: StateFlow<Int> = todoDao.observeOpenCount()
+
+    // Due-date reminders: one notification at the chosen hour on the due day. Rescheduled
+    // whenever to-dos change (added, edited, finished, deleted, restored, approved from chat).
+    private val reminderPrefs = com.example.reminders.ReminderPrefs(application)
+    private val _remindersEnabled = MutableStateFlow(reminderPrefs.enabled)
+    val remindersEnabled: StateFlow<Boolean> = _remindersEnabled.asStateFlow()
+    private val _reminderHour = MutableStateFlow(reminderPrefs.hour)
+    val reminderHour: StateFlow<Int> = _reminderHour.asStateFlow()
+
+    fun setRemindersEnabled(enabled: Boolean) {
+        reminderPrefs.enabled = enabled
+        _remindersEnabled.value = enabled
+        resyncReminders()
+    }
+
+    fun setReminderHour(hour: Int) {
+        reminderPrefs.hour = hour
+        _reminderHour.value = reminderPrefs.hour
+        resyncReminders()
+    }
+
+    private fun resyncReminders() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.example.reminders.Reminders.sync(getApplication(), todoDao.getOpen())
+        }
+    }
+
+    init {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            // Show anything that came due while the app was closed and the alarm didn't run.
+            runCatching { com.example.reminders.Reminders.handleDue(getApplication()) }
+            todoDao.observeVisible().collect { todos ->
+                runCatching { com.example.reminders.Reminders.sync(getApplication(), todos.filter { !it.done }) }
+            }
+        }
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     /** Adds a to-do typed by the user. Returns false (and saves nothing) if the text breaks a limit. */
