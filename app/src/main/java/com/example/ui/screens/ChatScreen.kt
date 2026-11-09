@@ -74,6 +74,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -144,15 +146,22 @@ fun ChatScreen(viewModel: AuraViewModel) {
         }
     }
 
+    // Voice fills the box as you speak; the user reviews it and taps send (audit SEC-13).
+    fun startVoiceInput() {
+        viewModel.voiceManager.startListening(
+            onResult = { spoken -> inputText = spoken },
+            onPartial = { partial -> inputText = partial },
+            onError = { reason -> viewModel.voiceNotice(reason) }
+        )
+    }
+
     // Audio recording permission launcher
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
             // Voice fills the box; the user reviews it and taps send (audit SEC-13).
-            viewModel.voiceManager.startListening { spoken ->
-                inputText = spoken
-            }
+            startVoiceInput()
         }
     }
 
@@ -387,6 +396,21 @@ fun ChatScreen(viewModel: AuraViewModel) {
             ) {
                 // Compact composer: voice input stays on the trailing side of the text field.
 
+                val voiceCaption = when (voiceState) {
+                    VoiceState.LISTENING -> "Listening\u2026 your words appear below. Tap the stars to stop."
+                    VoiceState.PROCESSING -> "Working on it\u2026 tap to stop."
+                    VoiceState.SPEAKING -> "Reading aloud. Tap \u25A0 or start typing to stop."
+                    VoiceState.IDLE -> null
+                }
+                if (voiceCaption != null) {
+                    Text(
+                        text = voiceCaption,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 4.dp).testTag("voice_caption")
+                    )
+                }
+
                 // Input row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -394,7 +418,11 @@ fun ChatScreen(viewModel: AuraViewModel) {
                 ) {
                     OutlinedTextField(
                         value = inputText,
-                        onValueChange = { inputText = it },
+                        onValueChange = {
+                            // Typing takes over: stop listening (it would overwrite the text) or speaking.
+                            if (voiceState != VoiceState.IDLE) viewModel.stopVoice()
+                            inputText = it
+                        },
                         placeholder = { Text("Message ${identity.name}") },
                         modifier = Modifier
                             .weight(1f)
@@ -413,7 +441,8 @@ fun ChatScreen(viewModel: AuraViewModel) {
 
                     Spacer(Modifier.width(8.dp))
 
-                    if (inputText.isNotBlank()) {
+                    // While voice is active the button stays a stop control, even once words appear.
+                    if (inputText.isNotBlank() && voiceState == VoiceState.IDLE) {
                         IconButton(
                             onClick = {
                                 val text = inputText
@@ -446,28 +475,42 @@ fun ChatScreen(viewModel: AuraViewModel) {
                                             Manifest.permission.RECORD_AUDIO
                                         ) == PackageManager.PERMISSION_GRANTED
                                         if (hasPermission) {
-                                            viewModel.voiceManager.startListening { spoken ->
-                                                inputText = spoken
-                                            }
+                                            startVoiceInput()
                                         } else {
                                             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                         }
                                     }
                                     VoiceState.LISTENING -> viewModel.voiceManager.stopListening()
-                                    VoiceState.SPEAKING -> viewModel.voiceManager.stopSpeaking()
-                                    VoiceState.PROCESSING -> Unit
+                                    VoiceState.SPEAKING, VoiceState.PROCESSING -> viewModel.stopVoice()
                                 }
                             },
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .background(
+                                    if (voiceState == VoiceState.IDLE) MaterialTheme.colorScheme.surfaceVariant
+                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                )
                                 .testTag("mic_input_button")
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Mic,
-                                contentDescription = "Voice Input",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            when (voiceState) {
+                                VoiceState.IDLE -> Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Voice input",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                VoiceState.LISTENING -> com.example.ui.components.StarListeningIndicator(
+                                    modifier = Modifier.semantics { contentDescription = "Listening. Tap to stop." }
+                                )
+                                VoiceState.PROCESSING -> com.example.ui.components.StarThinkingIndicator(
+                                    size = 22.dp,
+                                    modifier = Modifier.semantics { contentDescription = "Working. Tap to stop." }
+                                )
+                                VoiceState.SPEAKING -> Icon(
+                                    imageVector = Icons.Default.Stop,
+                                    contentDescription = "Stop speaking",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 }

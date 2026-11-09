@@ -23,6 +23,20 @@ enum class VoiceState {
     SPEAKING
 }
 
+/** Plain-language reasons for speech-recognition errors. */
+object VoiceErrors {
+    /** Null for errors that need no message (the user stopped it, or simply said nothing). */
+    fun message(code: Int): String? = when (code) {
+        SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Didn't catch that. Tap the mic and try again."
+        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Voice input needs a connection right now."
+        SpeechRecognizer.ERROR_AUDIO -> "The microphone couldn't record."
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Aura needs microphone permission for voice input."
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Voice input is busy. Try again in a moment."
+        SpeechRecognizer.ERROR_CLIENT -> null
+        else -> "Voice input stopped (error $code)."
+    }
+}
+
 class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
 
     private var tts: TextToSpeech? = null
@@ -74,13 +88,18 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
         })
     }
 
-    fun speak(text: String, pitch: Float = 1.0f, speed: Float = 1.0f) {
-        if (!isTtsReady) return
+    /** Returns false if the phone's voice isn't ready (so the caller can say so). */
+    fun speak(text: String, pitch: Float = 1.0f, speed: Float = 1.0f): Boolean {
+        if (!isTtsReady) {
+            if (_voiceState.value == VoiceState.PROCESSING) _voiceState.value = VoiceState.IDLE
+            return false
+        }
         stopListening()
         tts?.setPitch(pitch)
         tts?.setSpeechRate(speed)
         val utteranceId = "aura_tts_${System.currentTimeMillis()}"
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        return true
     }
 
     private var player: android.media.MediaPlayer? = null
@@ -119,10 +138,27 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
         }
     }
 
-    fun startListening(onResult: (String) -> Unit) {
+    /** Shown while an ElevenLabs reply is being fetched; tapping stop cancels it. */
+    fun markPreparing() {
+        _voiceState.value = VoiceState.PROCESSING
+    }
+
+    /** Stops listening and speaking, whatever is happening. */
+    fun stopAll() {
+        stopListening()
+        stopSpeaking()
+        _voiceState.value = VoiceState.IDLE
+    }
+
+    fun startListening(
+        onResult: (String) -> Unit,
+        onPartial: (String) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
         stopSpeaking()
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             Log.w(TAG, "Speech recognition not available on this device")
+            onError("Voice input isn't available on this phone.")
             return
         }
 
@@ -157,6 +193,7 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
                 override fun onError(error: Int) {
                     Log.e(TAG, "SpeechRecognizer error: $error")
                     _voiceState.value = VoiceState.IDLE
+                    VoiceErrors.message(error)?.let(onError)
                 }
 
                 override fun onResults(results: Bundle?) {
@@ -174,6 +211,7 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
                     val text = partialMatches?.firstOrNull()
                     if (!text.isNullOrBlank()) {
                         _recognizedText.value = text
+                        onPartial(text)
                     }
                 }
 
@@ -184,6 +222,7 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start SpeechRecognizer", e)
             _voiceState.value = VoiceState.IDLE
+            onError("Voice input couldn't start.")
         }
     }
 
@@ -200,6 +239,8 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
     }
 
     fun cleanup() {
+        player?.let { runCatching { it.stop() }; it.release() }
+        player = null
         tts?.stop()
         tts?.shutdown()
         speechRecognizer?.destroy()
