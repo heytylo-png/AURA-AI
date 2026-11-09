@@ -100,6 +100,21 @@ const ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech";
 export const MAX_SPEECH_CHARS = 1500;
 const DEFAULT_TTS_MODEL = "eleven_flash_v2_5";
 
+/**
+ * Per-user request limits (Cloudflare rate-limiting bindings, set in wrangler.toml), a guard against
+ * a runaway loop or a stolen token burning credits. If a binding is missing or errors, the request
+ * is allowed (fail open): the Anthropic/ElevenLabs spend limits are the hard backstop.
+ */
+export async function withinLimit(limiter, uid) {
+  if (!limiter || typeof limiter.limit !== "function") return true;
+  try {
+    const { success } = await limiter.limit({ key: uid });
+    return success !== false;
+  } catch {
+    return true;
+  }
+}
+
 export class RelayError extends Error {
   constructor(status, code, message) {
     super(message);
@@ -251,9 +266,16 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
       return uid;
     }
 
+    async function checkLimit(limiter, uid) {
+      if (!(await withinLimit(limiter, uid))) {
+        throw new RelayError(429, "rate_limited", "Too many requests in the last minute. Wait a moment and try again.");
+      }
+    }
+
     if (url.pathname === "/v1/speak") {
       try {
-        await authorize();
+        const uid = await authorize();
+        await checkLimit(env.SPEAK_LIMITER, uid);
         const key = env.ELEVENLABS_API_KEY;
         if (!key || key === "not-set" || !env.ELEVENLABS_VOICE_ID) {
           throw new RelayError(503, "tts_not_configured", "The relay has no ElevenLabs key or voice yet.");
@@ -300,7 +322,8 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
 
     try {
       if (!configured) throw new RelayError(503, "relay_not_configured", "The relay is missing its Anthropic key or Firebase project setting.");
-      await authorize();
+      const uid = await authorize();
+      await checkLimit(env.CHAT_LIMITER, uid);
 
       let body;
       try {
