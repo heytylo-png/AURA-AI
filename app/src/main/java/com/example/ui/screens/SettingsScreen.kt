@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Interests
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -298,6 +299,77 @@ fun SettingsScreen(
                                 )
                             )
                         }
+                    }
+                }
+            }
+
+            // Due-date reminders: on the phone only; nothing is sent anywhere.
+            val remindersEnabled by viewModel.remindersEnabled.collectAsState()
+            val reminderHour by viewModel.reminderHour.collectAsState()
+            val reminderContext = androidx.compose.ui.platform.LocalContext.current
+            var notificationsAllowed by remember { mutableStateOf(com.example.reminders.Reminders.notificationsAllowed(reminderContext)) }
+            val notificationPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+            ) { granted -> notificationsAllowed = granted }
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("To-do reminders", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "One notification on the day a to-do is due. The lock screen shows only that something is due, not the title. Runs on this phone only.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = remindersEnabled,
+                            onCheckedChange = { on ->
+                                viewModel.setRemindersEnabled(on)
+                                if (on && !notificationsAllowed && android.os.Build.VERSION.SDK_INT >= 33) {
+                                    notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            },
+                            colors = auraSwitchColors(),
+                            modifier = Modifier.testTag("reminders_switch")
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Remind me at", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                        TextButton(
+                            onClick = { viewModel.setReminderHour(reminderHour - 1) },
+                            enabled = remindersEnabled && reminderHour > com.example.reminders.ReminderPlan.HOURS.first,
+                            modifier = Modifier.testTag("reminder_earlier")
+                        ) { Text("\u2212") }
+                        Text(
+                            com.example.reminders.ReminderPlan.hourLabel(reminderHour),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.testTag("reminder_hour")
+                        )
+                        TextButton(
+                            onClick = { viewModel.setReminderHour(reminderHour + 1) },
+                            enabled = remindersEnabled && reminderHour < com.example.reminders.ReminderPlan.HOURS.last,
+                            modifier = Modifier.testTag("reminder_later")
+                        ) { Text("+") }
+                    }
+                    if (remindersEnabled && !notificationsAllowed) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Notifications aren't allowed for Aura, so reminders can't show. Allow them in the phone's app settings.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
                     }
                 }
             }
