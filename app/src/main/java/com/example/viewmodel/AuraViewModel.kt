@@ -204,6 +204,71 @@ class AuraViewModel @JvmOverloads constructor(
         android.widget.Toast.makeText(getApplication(), message, android.widget.Toast.LENGTH_LONG).show()
     }
 
+    // Encrypted backup and restore (audit 02, F-03). Nothing leaves the phone except to the file
+    // the user picks; the passphrase is never stored.
+    sealed interface BackupUiState {
+        data object Idle : BackupUiState
+        data class Working(val what: String) : BackupUiState
+        data class Done(val message: String) : BackupUiState
+        data class Failed(val message: String) : BackupUiState
+        data class ConfirmRestore(val summary: com.example.backup.BackupManager.Summary) : BackupUiState
+    }
+    private val _backupState = MutableStateFlow<BackupUiState>(BackupUiState.Idle)
+    val backupState: StateFlow<BackupUiState> = _backupState.asStateFlow()
+    private val backupManager by lazy { com.example.backup.BackupManager(getApplication()) }
+    private var pendingRestore: Map<String, ByteArray>? = null
+
+    fun dismissBackupMessage() {
+        pendingRestore = null
+        _backupState.value = BackupUiState.Idle
+    }
+
+    private fun backupError(e: Throwable): String =
+        (e as? com.example.backup.BackupCrypto.BackupException)?.message ?: "Something went wrong (${e.message ?: e.javaClass.simpleName})."
+
+    fun exportBackup(uri: android.net.Uri, passphrase: CharArray) {
+        _backupState.value = BackupUiState.Working("Encrypting your backup\u2026")
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _backupState.value = try {
+                backupManager.writeBackup(uri, passphrase)
+                BackupUiState.Done("Backup saved. Keep the passphrase somewhere safe: without it the backup can't be opened.")
+            } catch (e: Exception) {
+                BackupUiState.Failed("Backup not saved. ${backupError(e)}")
+            } finally {
+                passphrase.fill(' ')
+            }
+        }
+    }
+
+    fun inspectBackup(uri: android.net.Uri, passphrase: CharArray) {
+        _backupState.value = BackupUiState.Working("Unlocking the backup\u2026")
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _backupState.value = try {
+                val (summary, entries) = backupManager.inspect(backupManager.readFile(uri), passphrase)
+                pendingRestore = entries
+                BackupUiState.ConfirmRestore(summary)
+            } catch (e: Exception) {
+                BackupUiState.Failed("Nothing was changed. ${backupError(e)}")
+            } finally {
+                passphrase.fill(' ')
+            }
+        }
+    }
+
+    fun confirmRestore() {
+        val entries = pendingRestore ?: return
+        pendingRestore = null
+        _backupState.value = BackupUiState.Working("Restoring\u2026 Aura will restart.")
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                backupManager.restore(entries)
+                com.example.backup.BackupManager.restartApp(getApplication())
+            } catch (e: Exception) {
+                _backupState.value = BackupUiState.Failed(backupError(e))
+            }
+        }
+    }
+
     // Why an approved action failed, shown on its card (kept for this session).
     private val _actionFailures = MutableStateFlow<Map<Long, String>>(emptyMap())
     val actionFailures: StateFlow<Map<Long, String>> = _actionFailures.asStateFlow()
