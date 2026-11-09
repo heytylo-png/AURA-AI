@@ -303,6 +303,8 @@ fun SettingsScreen(
                 }
             }
 
+            com.example.ui.components.BackupCard(viewModel)
+
             // Due-date reminders: on the phone only; nothing is sent anywhere.
             val remindersEnabled by viewModel.remindersEnabled.collectAsState()
             val reminderHour by viewModel.reminderHour.collectAsState()

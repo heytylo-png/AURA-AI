@@ -20,6 +20,8 @@ class AuraApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Complete (or undo) a backup restore that was interrupted, before the database opens.
+        com.example.backup.BackupManager.finishInterruptedRestore(this)
         // Warm up database connection on application start
         AppDatabase.getInstance(this)
     }
