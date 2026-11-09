@@ -66,6 +66,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Until you add your access ID, a placeholder keeps the allowlist effectively empty.
           ALLOWED_UIDS: ${{ secrets.AURA_ALLOWED_UIDS || 'none-yet' }}
+          # Optional: read-aloud with ElevenLabs. Without the secret, /v1/speak reports "not configured".
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY || 'not-set' }}
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -74,4 +76,5 @@ jobs:
           secrets: |
             ANTHROPIC_API_KEY
             ALLOWED_UIDS
+            ELEVENLABS_API_KEY
           command: deploy --var FIREBASE_PROJECT_ID:${{ steps.secrets.outputs.project_id }}

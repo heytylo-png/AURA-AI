@@ -94,6 +94,12 @@ export const PROPOSAL_TOOLS = [
   },
 ];
 
+// Speech (ElevenLabs). The key is a relay secret; voice, model and the text limit are fixed here,
+// so the app can't pick another voice or send long texts that burn credits.
+const ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech";
+export const MAX_SPEECH_CHARS = 1500;
+const DEFAULT_TTS_MODEL = "eleven_flash_v2_5";
+
 export class RelayError extends Error {
   constructor(status, code, message) {
     super(message);
@@ -223,23 +229,78 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
       return json(200, {
         ok: configured,
         model: env.ANTHROPIC_MODEL || DEFAULT_MODEL,
+        speech: Boolean(env.ELEVENLABS_API_KEY && env.ELEVENLABS_API_KEY !== "not-set" && env.ELEVENLABS_VOICE_ID),
         allowedUsers: (env.ALLOWED_UIDS || "").split(",").filter((s) => s.trim()).length,
       });
     }
-    if (url.pathname !== "/v1/chat") return json(404, { error: { type: "not_found", message: "Not found." } });
+    if (url.pathname !== "/v1/chat" && url.pathname !== "/v1/speak") {
+      return json(404, { error: { type: "not_found", message: "Not found." } });
+    }
     if (request.method !== "POST") return json(405, { error: { type: "method_not_allowed", message: "Use POST." } });
 
-    try {
-      if (!configured) throw new RelayError(503, "relay_not_configured", "The relay is missing its Anthropic key or Firebase project setting.");
-
+    // Same sign-in and allowlist for every endpoint.
+    async function authorize() {
+      if (!env.FIREBASE_PROJECT_ID) throw new RelayError(503, "relay_not_configured", "The relay is missing its Firebase project setting.");
       const auth = request.headers.get("authorization") || "";
       const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
       const uid = await verifyFirebaseIdToken(token, env.FIREBASE_PROJECT_ID, getKey, now);
-
       const allowed = new Set((env.ALLOWED_UIDS || "").split(",").map((s) => s.trim()).filter(Boolean));
       if (!allowed.has(uid)) {
         throw new RelayError(403, "user_not_allowed", `This access ID is not allowed to use the relay yet: ${uid}`);
       }
+      return uid;
+    }
+
+    if (url.pathname === "/v1/speak") {
+      try {
+        await authorize();
+        const key = env.ELEVENLABS_API_KEY;
+        if (!key || key === "not-set" || !env.ELEVENLABS_VOICE_ID) {
+          throw new RelayError(503, "tts_not_configured", "The relay has no ElevenLabs key or voice yet.");
+        }
+        let body;
+        try {
+          body = await request.json();
+        } catch {
+          throw new RelayError(400, "invalid_request", "Body must be valid JSON.");
+        }
+        const text = typeof body?.text === "string" ? body.text.trim() : "";
+        if (!text) throw new RelayError(400, "invalid_request", "text must be a non-empty string.");
+        if (text.length > MAX_SPEECH_CHARS) {
+          throw new RelayError(413, "request_too_large", `text must be at most ${MAX_SPEECH_CHARS} characters.`);
+        }
+        const upstream = await fetchImpl(
+          `${ELEVENLABS_URL}/${encodeURIComponent(env.ELEVENLABS_VOICE_ID)}/stream?output_format=mp3_44100_128`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json", "xi-api-key": key, accept: "audio/mpeg" },
+            body: JSON.stringify({ text, model_id: env.ELEVENLABS_MODEL || DEFAULT_TTS_MODEL }),
+          }
+        );
+        if (!upstream.ok) {
+          let detail = `ElevenLabs returned HTTP ${upstream.status}.`;
+          try {
+            const e = await upstream.json();
+            const msg = e?.detail?.message || e?.detail?.status || (typeof e?.detail === "string" ? e.detail : null);
+            if (msg) detail = `ElevenLabs: ${msg}`;
+          } catch {}
+          // A bad key is the relay's problem, not the user's.
+          const status = upstream.status === 401 ? 502 : upstream.status;
+          throw new RelayError(status, "tts_upstream_error", detail);
+        }
+        return new Response(upstream.body, {
+          status: 200,
+          headers: { "content-type": "audio/mpeg", "cache-control": "no-store" },
+        });
+      } catch (e) {
+        if (e instanceof RelayError) return errorResponse(e);
+        return errorResponse(new RelayError(500, "relay_error", "The relay failed unexpectedly."));
+      }
+    }
+
+    try {
+      if (!configured) throw new RelayError(503, "relay_not_configured", "The relay is missing its Anthropic key or Firebase project setting.");
+      await authorize();
 
       let body;
       try {

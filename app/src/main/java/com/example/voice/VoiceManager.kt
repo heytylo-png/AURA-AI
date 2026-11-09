@@ -83,7 +83,34 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
     }
 
+    private var player: android.media.MediaPlayer? = null
+
+    /** Plays a downloaded reply (ElevenLabs voice). Returns false if the file can't be played. */
+    fun playAudio(file: java.io.File): Boolean {
+        stopSpeaking()
+        stopListening()
+        return try {
+            player = android.media.MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                setOnCompletionListener { _voiceState.value = VoiceState.IDLE; it.release(); if (player === it) player = null }
+                setOnErrorListener { mp, _, _ -> _voiceState.value = VoiceState.IDLE; mp.release(); if (player === mp) player = null; true }
+                prepare()
+                start()
+            }
+            _voiceState.value = VoiceState.SPEAKING
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Couldn't play reply audio", e)
+            player?.release()
+            player = null
+            _voiceState.value = VoiceState.IDLE
+            false
+        }
+    }
+
     fun stopSpeaking() {
+        player?.let { runCatching { it.stop() }; it.release() }
+        player = null
         if (tts?.isSpeaking == true) {
             tts?.stop()
         }

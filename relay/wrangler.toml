@@ -8,3 +8,6 @@ workers_dev = true
 [vars]
 ANTHROPIC_MODEL = "claude-sonnet-5-5"
 MAX_OUTPUT_TOKENS = "2048"
+# ElevenLabs voice for read-aloud (the key is a secret set by the deploy workflow).
+ELEVENLABS_VOICE_ID = "wsj349S7Ee6gB32Poaf0"
+ELEVENLABS_MODEL = "eleven_flash_v2_5"

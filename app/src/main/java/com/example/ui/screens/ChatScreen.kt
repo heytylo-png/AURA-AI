@@ -315,7 +315,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
                             onApproveAction = { viewModel.approveAction(it) },
                             onDismissAction = { viewModel.dismissAction(it) },
                             onSpeakText = { text ->
-                                viewModel.voiceManager.speak(text, identity.voicePitch, identity.voiceSpeed)
+                                viewModel.speakReply(text)
                             },
                             aiName = identity.name,
                             projects = projectsForCards,
