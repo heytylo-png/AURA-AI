@@ -103,16 +103,26 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
     }
 
     private var player: android.media.MediaPlayer? = null
+    /** The downloaded reply being played; deleted as soon as playback ends (audit 02, F-05). */
+    private var playingFile: java.io.File? = null
+
+    private fun releasePlayer() {
+        player?.let { runCatching { it.stop() }; it.release() }
+        player = null
+        playingFile?.delete()
+        playingFile = null
+    }
 
     /** Plays a downloaded reply (ElevenLabs voice). Returns false if the file can't be played. */
     fun playAudio(file: java.io.File): Boolean {
         stopSpeaking()
         stopListening()
+        playingFile = file
         return try {
             player = android.media.MediaPlayer().apply {
                 setDataSource(file.absolutePath)
-                setOnCompletionListener { _voiceState.value = VoiceState.IDLE; it.release(); if (player === it) player = null }
-                setOnErrorListener { mp, _, _ -> _voiceState.value = VoiceState.IDLE; mp.release(); if (player === mp) player = null; true }
+                setOnCompletionListener { if (player === it) releasePlayer() else it.release(); _voiceState.value = VoiceState.IDLE }
+                setOnErrorListener { mp, _, _ -> if (player === mp) releasePlayer() else mp.release(); _voiceState.value = VoiceState.IDLE; true }
                 prepare()
                 start()
             }
@@ -120,16 +130,14 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
             true
         } catch (e: Exception) {
             Log.w(TAG, "Couldn't play reply audio", e)
-            player?.release()
-            player = null
+            releasePlayer()
             _voiceState.value = VoiceState.IDLE
             false
         }
     }
 
     fun stopSpeaking() {
-        player?.let { runCatching { it.stop() }; it.release() }
-        player = null
+        releasePlayer()
         if (tts?.isSpeaking == true) {
             tts?.stop()
         }
@@ -239,8 +247,7 @@ class VoiceManager(private val context: Context) : TextToSpeech.OnInitListener {
     }
 
     fun cleanup() {
-        player?.let { runCatching { it.stop() }; it.release() }
-        player = null
+        releasePlayer()
         tts?.stop()
         tts?.shutdown()
         speechRecognizer?.destroy()

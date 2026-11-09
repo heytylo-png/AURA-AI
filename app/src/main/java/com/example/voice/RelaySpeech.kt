@@ -42,10 +42,12 @@ class RelaySpeech(
                     }.getOrNull()?.takeIf { it.isNotBlank() } ?: "HTTP ${res.code}"
                     return@withContext Result.failure(SpeechError(message))
                 }
-                val out = File(cacheDir, "aura_reply.mp3")
+                // Each reply gets its own file (deleted after playback); leftovers from a crash are cleared here.
+                cacheDir.listFiles { f -> f.name.startsWith("aura_reply") }?.forEach { it.delete() }
+                val out = File.createTempFile("aura_reply", ".mp3", cacheDir)
                 res.body?.byteStream()?.use { input -> out.outputStream().use { input.copyTo(it) } }
-                    ?: return@withContext Result.failure(SpeechError("no audio came back"))
-                if (out.length() == 0L) return@withContext Result.failure(SpeechError("no audio came back"))
+                    ?: run { out.delete(); return@withContext Result.failure(SpeechError("no audio came back")) }
+                if (out.length() == 0L) { out.delete(); return@withContext Result.failure(SpeechError("no audio came back")) }
                 Result.success(out)
             }
         } catch (e: CancellationException) {

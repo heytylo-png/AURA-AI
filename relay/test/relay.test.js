@@ -278,3 +278,47 @@ test("speech: ElevenLabs errors come back readable; a bad key becomes 502", asyn
   res = await speak(handle, speakEnv(env), { token: await makeToken() });
   assert.equal(res.status, 502);
 });
+
+// A fake Cloudflare rate limiter: allows `max` calls per key.
+function fakeLimiter(max) {
+  const counts = new Map();
+  return {
+    keys: counts,
+    async limit({ key }) {
+      const n = (counts.get(key) || 0) + 1;
+      counts.set(key, n);
+      return { success: n <= max };
+    },
+  };
+}
+
+test("rate limit: chat and speech are limited per user and over-limit calls never reach upstream", async () => {
+  const { handle, env, calls } = setup();
+  const chatLimiter = fakeLimiter(2);
+  const speakLimiter = fakeLimiter(1);
+  const limited = { ...speakEnv(env), CHAT_LIMITER: chatLimiter, SPEAK_LIMITER: speakLimiter };
+  const token = await makeToken();
+
+  assert.equal((await post(handle, limited, { token })).status, 200);
+  assert.equal((await post(handle, limited, { token })).status, 200);
+  const third = await post(handle, limited, { token });
+  assert.equal(third.status, 429);
+  assert.equal((await third.json()).error.type, "rate_limited");
+  assert.equal(calls.filter((c) => c.url.startsWith("https://api.anthropic.com")).length, 2);
+  assert.deepEqual([...chatLimiter.keys.keys()], [ALLOWED]);
+
+  assert.equal((await speak(handle, limited, { token })).status, 200);
+  assert.equal((await speak(handle, limited, { token })).status, 429);
+  assert.equal(calls.filter((c) => c.url.startsWith("https://api.elevenlabs.io")).length, 1);
+});
+
+test("rate limit: unauthenticated calls don't count, and a missing or broken limiter fails open", async () => {
+  const { handle, env } = setup();
+  const chatLimiter = fakeLimiter(0);
+  assert.equal((await post(handle, { ...env, CHAT_LIMITER: chatLimiter }, {})).status, 401);
+  assert.equal(chatLimiter.keys.size, 0);
+
+  const broken = { limit: async () => { throw new Error("binding down"); } };
+  assert.equal((await post(handle, { ...env, CHAT_LIMITER: broken }, { token: await makeToken() })).status, 200);
+  assert.equal((await post(handle, env, { token: await makeToken() })).status, 200);
+});
