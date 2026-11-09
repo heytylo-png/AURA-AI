@@ -409,6 +409,31 @@ fun SettingsScreen(
                         )
                     }
 
+                    val elevenLabsVoice by viewModel.elevenLabsVoice.collectAsState()
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Read replies with ElevenLabs voice", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "Sends the reply text (up to 1,500 characters) to ElevenLabs through Aura's relay to read it in your voice. Uses ElevenLabs credits. When off, offline or out of credits, the phone's voice reads it instead.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = elevenLabsVoice,
+                            onCheckedChange = viewModel::setElevenLabsVoice,
+                            enabled = cloudChatEnabled,
+                            colors = auraSwitchColors(),
+                            modifier = Modifier.testTag("elevenlabs_voice_switch")
+                        )
+                    }
+
                     // Claude relay access ID: the owner adds it to the relay's allowlist once.
                     val relayAccessId by viewModel.relayAccessId.collectAsState()
                     val relayAccessStatus by viewModel.relayAccessStatus.collectAsState()

@@ -150,6 +150,46 @@ class AuraViewModel @JvmOverloads constructor(
         _shareTodos.value = enabled
     }
 
+    // Off by default: replies are read in the user's ElevenLabs voice. The text goes to ElevenLabs
+    // through the relay; on any failure Aura says why and uses the phone's voice instead.
+    private val _elevenLabsVoice = MutableStateFlow(privacyPrefs.getBoolean("elevenlabs_voice", false))
+    val elevenLabsVoice: StateFlow<Boolean> = _elevenLabsVoice.asStateFlow()
+
+    fun setElevenLabsVoice(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("elevenlabs_voice", enabled).apply()
+        _elevenLabsVoice.value = enabled
+    }
+
+    private val relaySpeech by lazy {
+        com.example.voice.RelaySpeech(BuildConfig.AURA_RELAY_URL, relayAuth, getApplication<Application>().cacheDir)
+    }
+    private var speechJob: kotlinx.coroutines.Job? = null
+
+    /** Reads a reply aloud: the ElevenLabs voice when switched on, else (or on failure) the phone's voice. */
+    fun speakReply(markdown: String) {
+        val text = com.example.voice.SpeechText.prepare(markdown)
+        if (text.isBlank()) return
+        val pitch = _identity.value.voicePitch
+        val speed = _identity.value.voiceSpeed
+        speechJob?.cancel()
+        voiceManager.stopSpeaking()
+        if (!_elevenLabsVoice.value || !cloudChatEnabled.value) {
+            voiceManager.speak(text, pitch, speed)
+            return
+        }
+        speechJob = viewModelScope.launch {
+            val audio = relaySpeech.fetch(text)
+            val played = audio.getOrNull()?.let { voiceManager.playAudio(it) } == true
+            if (!played) {
+                val reason = audio.exceptionOrNull()?.message ?: "the audio couldn't be played"
+                android.widget.Toast.makeText(
+                    getApplication(), "ElevenLabs voice unavailable ($reason). Using the phone's voice.", android.widget.Toast.LENGTH_LONG
+                ).show()
+                voiceManager.speak(text, pitch, speed)
+            }
+        }
+    }
+
     // Why an approved action failed, shown on its card (kept for this session).
     private val _actionFailures = MutableStateFlow<Map<Long, String>>(emptyMap())
     val actionFailures: StateFlow<Map<Long, String>> = _actionFailures.asStateFlow()
@@ -512,11 +552,7 @@ class AuraViewModel @JvmOverloads constructor(
 
                         // If auto-speak enabled, speak the answer
                         if (_identity.value.autoSpeakResponses) {
-                            voiceManager.speak(
-                                text = com.example.ui.components.MarkdownRenderer.plainText(state.fullText).take(300),
-                                pitch = _identity.value.voicePitch,
-                                speed = _identity.value.voiceSpeed
-                            )
+                            speakReply(state.fullText)
                         }
                     }
                     is HybridAiState.Error -> {

@@ -38,7 +38,7 @@ async function makeToken(claims = {}, { kid = "k1", key = keyPair.privateKey, al
   return `${signingInput}.${b64url(new Uint8Array(sig))}`;
 }
 
-function setup({ upstream } = {}) {
+function setup({ upstream, speechUpstream } = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url: String(url), init });
@@ -46,6 +46,9 @@ function setup({ upstream } = {}) {
       return new Response(JSON.stringify({ keys: [publicJwk] }), {
         headers: { "content-type": "application/json", "cache-control": "public, max-age=1000" },
       });
+    }
+    if (String(url).startsWith("https://api.elevenlabs.io/")) {
+      return speechUpstream ? speechUpstream(init) : new Response(new Uint8Array([0x49, 0x44, 0x33]), { headers: { "content-type": "audio/mpeg" } });
     }
     if (String(url) === "https://api.anthropic.com/v1/messages") {
       return upstream ? upstream(init) : new Response("event: message_stop\ndata: {}\n\n", { headers: { "content-type": "text/event-stream" } });
@@ -164,7 +167,7 @@ test("health reports configuration without secrets", async () => {
   const { handle, env } = setup();
   const res = await handle(new Request("https://relay.example/health"), env);
   const body = await res.json();
-  assert.deepEqual(body, { ok: true, model: "claude-sonnet-5-5", allowedUsers: 2 });
+  assert.deepEqual(body, { ok: true, model: "claude-sonnet-5-5", speech: false, allowedUsers: 2 });
   assert.ok(!JSON.stringify(body).includes("sk-test"));
 });
 
@@ -231,4 +234,47 @@ test("proposal tools are tightly bounded", () => {
   const memory = PROPOSAL_TOOLS.find((t) => t.name === "propose_save_memory");
   assert.deepEqual(memory.input_schema.properties.category.enum, MEMORY_CATEGORIES);
   assert.deepEqual(memory.input_schema.properties.importance, { type: "integer", minimum: 1, maximum: 5 });
+});
+
+const speakEnv = (env) => ({ ...env, ELEVENLABS_API_KEY: "el-test", ELEVENLABS_VOICE_ID: "wsj349S7Ee6gB32Poaf0" });
+
+async function speak(handle, env, { token, body = { text: "Hello there." } } = {}) {
+  const headers = { "content-type": "application/json" };
+  if (token) headers.authorization = `Bearer ${token}`;
+  return handle(new Request("https://relay.example/v1/speak", { method: "POST", headers, body: JSON.stringify(body) }), env);
+}
+
+test("speech: allowed user gets audio in the relay's fixed voice and model", async () => {
+  const { handle, env, calls } = setup();
+  const res = await speak(handle, speakEnv(env), { token: await makeToken(), body: { text: " Hello there. ", voice_id: "someone-else", model_id: "x" } });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "audio/mpeg");
+  const up = calls.find((c) => c.url.startsWith("https://api.elevenlabs.io/"));
+  assert.equal(up.url, "https://api.elevenlabs.io/v1/text-to-speech/wsj349S7Ee6gB32Poaf0/stream?output_format=mp3_44100_128");
+  assert.equal(up.init.headers["xi-api-key"], "el-test");
+  assert.deepEqual(JSON.parse(up.init.body), { text: "Hello there.", model_id: "eleven_flash_v2_5" });
+});
+
+test("speech: no token, not allowed, too long, or no key never reaches ElevenLabs", async () => {
+  const { handle, env, calls } = setup();
+  assert.equal((await speak(handle, speakEnv(env), {})).status, 401);
+  assert.equal((await speak(handle, speakEnv(env), { token: await makeToken({ sub: "stranger" }) })).status, 403);
+  assert.equal((await speak(handle, speakEnv(env), { token: await makeToken(), body: { text: "x".repeat(1501) } })).status, 413);
+  assert.equal((await speak(handle, speakEnv(env), { token: await makeToken(), body: { text: "  " } })).status, 400);
+  const noKey = await speak(handle, { ...speakEnv(env), ELEVENLABS_API_KEY: "not-set" }, { token: await makeToken() });
+  assert.equal(noKey.status, 503);
+  assert.equal((await noKey.json()).error.type, "tts_not_configured");
+  assert.equal(calls.filter((c) => c.url.startsWith("https://api.elevenlabs.io/")).length, 0);
+});
+
+test("speech: ElevenLabs errors come back readable; a bad key becomes 502", async () => {
+  const quota = () => new Response(JSON.stringify({ detail: { status: "quota_exceeded", message: "You have 12 credits left." } }), { status: 402 });
+  let { handle, env } = setup({ speechUpstream: quota });
+  let res = await speak(handle, speakEnv(env), { token: await makeToken() });
+  assert.equal(res.status, 402);
+  assert.match((await res.json()).error.message, /12 credits/);
+
+  ({ handle, env } = setup({ speechUpstream: () => new Response(JSON.stringify({ detail: "Invalid API key" }), { status: 401 }) }));
+  res = await speak(handle, speakEnv(env), { token: await makeToken() });
+  assert.equal(res.status, 502);
 });
