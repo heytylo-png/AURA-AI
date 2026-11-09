@@ -76,6 +76,42 @@ fun StarThinkingIndicator(
     }
 }
 
+/**
+ * Aura's "listening" mark: the same three stars, held still and breathing in turn, so it reads
+ * as waiting for you rather than working. Holds still when animations are off.
+ */
+@Composable
+fun StarListeningIndicator(
+    modifier: Modifier = Modifier,
+    size: Dp = 22.dp,
+    color: Color = MaterialTheme.colorScheme.primary
+) {
+    val context = LocalContext.current
+    val animate = remember {
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
+    }
+    val transition = rememberInfiniteTransition(label = "aura_listen")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart),
+        label = "aura_listen_breath"
+    )
+    Canvas(modifier = modifier.size(size)) {
+        val ring = this.size.minDimension * 0.24f
+        val base = this.size.minDimension * 0.22f
+        STARS.forEachIndexed { i, (deg, scale) ->
+            val a = (deg - 90f) * (PI / 180f).toFloat()
+            val c = Offset(center.x + ring * cos(a), center.y + ring * sin(a))
+            val w = if (animate) twinkle(phase, i) else 1f
+            drawStar(c, base * scale * breath(w), color.copy(alpha = color.alpha * w))
+        }
+    }
+}
+
+/** Star size factor while listening: 0.8–1.2 as the twinkle value goes 0.35–1. */
+internal fun breath(twinkleValue: Float): Float = 0.8f + 0.4f * ((twinkleValue - 0.35f) / 0.65f)
+
 /** "Starai is thinking" row used in the chat list. */
 @Composable
 fun ThinkingRow(aiName: String, modifier: Modifier = Modifier) {

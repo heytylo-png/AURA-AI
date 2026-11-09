@@ -172,22 +172,36 @@ class AuraViewModel @JvmOverloads constructor(
         val pitch = _identity.value.voicePitch
         val speed = _identity.value.voiceSpeed
         speechJob?.cancel()
-        voiceManager.stopSpeaking()
+        voiceManager.stopAll()
         if (!_elevenLabsVoice.value || !cloudChatEnabled.value) {
-            voiceManager.speak(text, pitch, speed)
+            phoneVoice(text, pitch, speed)
             return
         }
+        voiceManager.markPreparing()
         speechJob = viewModelScope.launch {
             val audio = relaySpeech.fetch(text)
             val played = audio.getOrNull()?.let { voiceManager.playAudio(it) } == true
             if (!played) {
                 val reason = audio.exceptionOrNull()?.message ?: "the audio couldn't be played"
-                android.widget.Toast.makeText(
-                    getApplication(), "ElevenLabs voice unavailable ($reason). Using the phone's voice.", android.widget.Toast.LENGTH_LONG
-                ).show()
-                voiceManager.speak(text, pitch, speed)
+                voiceNotice("ElevenLabs voice unavailable ($reason). Using the phone's voice.")
+                phoneVoice(text, pitch, speed)
             }
         }
+    }
+
+    /** Stops whatever voice is running: listening, fetching an ElevenLabs reply, or speaking. */
+    fun stopVoice() {
+        speechJob?.cancel()
+        speechJob = null
+        voiceManager.stopAll()
+    }
+
+    private fun phoneVoice(text: String, pitch: Float, speed: Float) {
+        if (!voiceManager.speak(text, pitch, speed)) voiceNotice("The phone's voice isn't ready yet. Try again in a moment.")
+    }
+
+    fun voiceNotice(message: String) {
+        android.widget.Toast.makeText(getApplication(), message, android.widget.Toast.LENGTH_LONG).show()
     }
 
     // Why an approved action failed, shown on its card (kept for this session).

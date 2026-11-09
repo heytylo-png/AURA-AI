@@ -130,9 +130,10 @@ fun DashboardScreen(
     ) { isGranted ->
         if (isGranted) {
             // Voice fills the box; the user reviews it and taps send (audit SEC-13).
-            viewModel.voiceManager.startListening { spoken ->
-                quickPromptText = spoken
-            }
+            viewModel.voiceManager.startListening(
+                onResult = { spoken -> quickPromptText = spoken },
+                onError = { reason -> viewModel.voiceNotice(reason) }
+            )
         }
     }
 
@@ -191,16 +192,16 @@ fun DashboardScreen(
                                     ) == PackageManager.PERMISSION_GRANTED
                                     if (hasPermission) {
                                         // Voice fills the box; nothing is sent until the user taps send.
-                                        viewModel.voiceManager.startListening { spoken ->
-                                            quickPromptText = spoken
-                                        }
+                                        viewModel.voiceManager.startListening(
+                                            onResult = { spoken -> quickPromptText = spoken },
+                                            onError = { reason -> viewModel.voiceNotice(reason) }
+                                        )
                                     } else {
                                         audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                     }
                                 }
                                 VoiceState.LISTENING -> viewModel.voiceManager.stopListening()
-                                VoiceState.SPEAKING -> viewModel.voiceManager.stopSpeaking()
-                                VoiceState.PROCESSING -> {}
+                                VoiceState.SPEAKING, VoiceState.PROCESSING -> viewModel.stopVoice()
                             }
                         },
                         onQuickSuggestionClick = { prompt ->
