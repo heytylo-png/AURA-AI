@@ -233,13 +233,18 @@ class AiProviderContractTest {
     }
 
     @Test
-    fun greetingRouteUsesWholeWordsOnly() {
+    fun autoModeKeepsOnlyTypedCommandsOnThePhone() {
         val e = engine(FakeProvider())
-        assertTrue(e.shouldRouteToLocal("hi"))
-        assertTrue(e.shouldRouteToLocal("hello there"))
-        assertFalse(e.shouldRouteToLocal("Explain this theorem"))
-        assertFalse(e.shouldRouteToLocal("Which one wins?"))
-        assertFalse(e.shouldRouteToLocal("I think so"))
+        for (cmd in listOf("remember that I like tea", "Remember: dentist on Friday", "add task: walk dogs", "todo: buy soil",
+                "create project Garden", "new project Garden", "show memories")) {
+            assertTrue(cmd, e.shouldRouteToLocal(cmd))
+        }
+        for (chat in listOf("hi", "hello there", "who are you?", "what do you remember about me?",
+                "I prefer Kotlin, explain coroutines", "my favorite food is ramen, any recipes?",
+                "remember when we talked about dogs?", "hello star, can you add task: walk dogs",
+                "Explain this theorem", "Which one wins?")) {
+            assertFalse(chat, e.shouldRouteToLocal(chat))
+        }
     }
 
     @Test

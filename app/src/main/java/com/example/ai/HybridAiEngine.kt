@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 
 enum class HybridRoutingMode(val label: String, val description: String) {
-    AUTO_HYBRID("Auto Hybrid Router", "Routes simple & offline tasks to Local, complex reasoning to Cloud"),
+    AUTO_HYBRID("Auto Hybrid Router", "Claude answers when online and cloud chat is on; typed commands (remember…, add task:, create project…) and offline messages stay on this phone"),
     FORCE_LOCAL("Local Model Only", "100% on-device offline edge reasoning"),
     FORCE_CLOUD("Cloud Claude", "Anthropic's Claude via your private Aura relay")
 }
@@ -51,20 +51,14 @@ class HybridAiEngine(
     /**
      * Inspects query characteristics to determine if local execution is ideal.
      */
+    /**
+     * Auto mode, online, cloud chat on: Claude answers everything except a few typed commands that
+     * the phone handles itself (and that never need to leave it). A command must START the message,
+     * so "I prefer Kotlin, explain coroutines" or "who are you?" go to Claude, not to canned replies.
+     */
     fun shouldRouteToLocal(prompt: String): Boolean {
-        val lower = prompt.lowercase().trim()
-        val wordCount = prompt.split("\\s+".toRegex()).size
-
-        // Direct triggers for local engine
-        // Whole words only: "hi" must not match "this", "which" or "think".
-        if (wordCount <= 4 && GREETING.containsMatchIn(lower)) return true
-        if (lower.startsWith("remember") || lower.contains("my favorite") || lower.contains("i prefer")) return true
-        if (lower.startsWith("create project") || lower.startsWith("new project")) return true
-        if (lower.startsWith("add task") || lower.startsWith("todo:") || lower.startsWith("task:")) return true
-        if (lower.contains("what do you remember") || lower.contains("show memories")) return true
-        if (lower.contains("who are you") || lower.contains("what is your identity")) return true
-
-        return false
+        val lower = prompt.trim().lowercase()
+        return LOCAL_COMMANDS.any { lower.startsWith(it) } || lower == "show memories"
     }
 
     fun processHybridRequest(
@@ -275,6 +269,11 @@ class HybridAiEngine(
     )
 
     private companion object {
-        val GREETING = Regex("""\b(hi|hello|hey)\b""")
+        /** Typed commands handled on the phone in Auto mode (see [shouldRouteToLocal]). */
+        val LOCAL_COMMANDS = listOf(
+            "remember that ", "remember:", "remember i ", "remember my ",
+            "add task:", "add task ", "todo:", "task:",
+            "create project", "new project"
+        )
     }
 }
