@@ -22,7 +22,9 @@ data class AiProviderRequest(
     /** Let Claude propose changes (save memory, create project, add milestone) as approval cards. */
     val allowProposals: Boolean = false,
     /** Open to-dos the user chose to share: titles and due dates only (see [CloudTodos]). */
-    val openTodos: List<CloudTodo> = emptyList()
+    val openTodos: List<CloudTodo> = emptyList(),
+    /** How many open to-dos the user has in total, so Claude knows whether [openTodos] is the whole list. */
+    val openTodosTotal: Int = openTodos.size
 )
 
 /** What Claude may see of one open to-do. Notes, project and history never leave the phone. */
@@ -30,6 +32,9 @@ data class CloudTodo(val title: String, val dueDate: String?)
 
 object CloudTodos {
     const val MAX = 30
+
+    /** How many open, non-deleted to-dos there are (the list sent may be capped at [MAX]). */
+    fun openCount(todos: List<com.example.data.model.TodoEntity>): Int = todos.count { !it.done && it.deletedAt == null }
 
     /** Open, non-deleted to-dos, soonest due first (undated last), at most [MAX], titles and dates only. */
     fun from(todos: List<com.example.data.model.TodoEntity>): List<CloudTodo> = todos
