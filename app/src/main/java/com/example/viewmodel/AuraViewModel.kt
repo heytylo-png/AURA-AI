@@ -880,7 +880,7 @@ class AuraViewModel @JvmOverloads constructor(
         viewModelScope.launch { projectRepository.updateArtifact(artifact.copy(title = title.trim(), content = content)) }
     }
 
-    /** Reads a text file the user picked into a project note. Returns a reason on failure. */
+    /** Reads a text file or PDF the user picked into a project note (on the phone). Returns a reason on failure. */
     suspend fun readTextFile(uri: android.net.Uri): Result<Pair<String, String>> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         runCatching {
             val resolver = getApplication<Application>().contentResolver
@@ -894,11 +894,16 @@ class AuraViewModel @JvmOverloads constructor(
                     val n = input.read(chunk)
                     if (n < 0) break
                     buffer.write(chunk, 0, n)
-                    if (buffer.size() > com.example.data.model.NoteImport.MAX_BYTES) throw IllegalArgumentException("That file is larger than 200 KB. Only text files up to 200 KB can be added.")
+                    if (buffer.size() > com.example.data.model.PdfText.MAX_BYTES) throw IllegalArgumentException("That file is larger than 10 MB.")
                 }
                 buffer.toByteArray()
             } ?: throw IllegalArgumentException("Couldn't open that file.")
-            name to com.example.data.model.NoteImport.decode(bytes)
+            val text = if (com.example.data.model.PdfText.isPdf(bytes)) {
+                com.example.data.model.PdfText.extract(getApplication(), bytes)
+            } else {
+                com.example.data.model.NoteImport.decode(bytes)
+            }
+            name to text
         }
     }
 

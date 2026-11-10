@@ -602,13 +602,18 @@ fun AddArtifactDialog(
     var content by remember { mutableStateOf(initial?.content ?: "") }
     var type by remember { mutableStateOf(initial?.type ?: "NOTE") }
     var importError by remember { mutableStateOf<String?>(null) }
+    var importing by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val pickFile = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) scope.launch {
-            viewModel.readTextFile(uri)
+            importing = true
+            importError = null
+            val result = viewModel.readTextFile(uri)
+            importing = false
+            result
                 .onSuccess { (name, text) ->
                     if (title.isBlank()) title = name
                     content = if (content.isBlank()) text else content + "\n\n" + text
@@ -638,9 +643,10 @@ fun AddArtifactDialog(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).testTag("note_content_field"),
                     minLines = 4
                 )
-                TextButton(onClick = { pickFile.launch(arrayOf("text/*", "application/json", "application/xml", "application/octet-stream")) }) {
-                    Text("Import a text file (.txt, .md, .csv, code)")
+                TextButton(onClick = { pickFile.launch(arrayOf("text/*", "application/pdf", "application/json", "application/xml", "application/octet-stream")) }) {
+                    Text("Import a file (PDF, .txt, .md, .csv, code)")
                 }
+                if (importing) Text("Reading the file on this phone\u2026", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 importError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
                 if (onDelete != null) {
                     if (!confirmDelete) {

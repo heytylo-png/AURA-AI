@@ -105,6 +105,8 @@ dependencies {
   implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
+  // PDF text extraction on the phone for project notes (Apache 2.0). Nothing is sent anywhere.
+  implementation("com.tom-roush:pdfbox-android:2.0.27.0")
   // implementation(libs.androidx.camera.camera2)
   // implementation(libs.androidx.camera.core)
   // implementation(libs.androidx.camera.lifecycle)
