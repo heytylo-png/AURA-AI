@@ -24,7 +24,9 @@ data class AiProviderRequest(
     /** Open to-dos the user chose to share: titles and due dates only (see [CloudTodos]). */
     val openTodos: List<CloudTodo> = emptyList(),
     /** How many open to-dos the user has in total, so Claude knows whether [openTodos] is the whole list. */
-    val openTodosTotal: Int = openTodos.size
+    val openTodosTotal: Int = openTodos.size,
+    /** The project being chatted in, only if the user turned on sharing for it (see [CloudProjects]). */
+    val sharedProject: CloudProject? = null
 )
 
 /** What Claude may see of one open to-do. Notes, project and history never leave the phone. */
@@ -86,6 +88,7 @@ internal fun AiProviderRequest.withoutPersonalContext(): AiProviderRequest = cop
     activeMemories = emptyList(),
     currentProject = null,
     userSettings = null,
+    sharedProject = null,
     allowPersonalContext = false
 )
 

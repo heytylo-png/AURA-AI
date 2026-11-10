@@ -118,6 +118,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val currentStreamingText by viewModel.currentStreamingText.collectAsState()
     val streamingModelUsed by viewModel.streamingModelUsed.collectAsState()
     val voiceState by viewModel.voiceState.collectAsState()
+    val sharedProjectIds by viewModel.sharedProjectIds.collectAsState()
     val activeProject by viewModel.activeProject.collectAsState()
     val routingMode by viewModel.routingMode.collectAsState()
     val taskActions by viewModel.allTaskActions.collectAsState()
@@ -289,6 +290,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
                 routingMode = routingMode,
                 onSelectRoutingMode = { viewModel.setRoutingMode(it) },
                 activeProjectName = activeProject?.title,
+                projectShared = activeProject?.let { it.id in sharedProjectIds } ?: false,
                 activeSessionTitle = activeSession?.title,
                 hasMessages = messages.isNotEmpty() || currentStreamingText != null,
                 onExitProjectContext = { viewModel.setActiveProject(null) },
@@ -527,6 +529,8 @@ fun ChatTopHeader(
     routingMode: HybridRoutingMode,
     onSelectRoutingMode: (HybridRoutingMode) -> Unit,
     activeProjectName: String?,
+    /** Whether Claude can see the active project (the user's per-project switch). */
+    projectShared: Boolean = false,
     activeSessionTitle: String? = null,
     hasMessages: Boolean,
     onExitProjectContext: () -> Unit,
@@ -680,12 +684,21 @@ fun ChatTopHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = "Project Scope: $activeProjectName",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Project: $activeProjectName",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (projectShared) "Shared: Claude can see its notes, milestones and to-dos"
+                            else "Not shared: Claude can't see it (turn on in Projects)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        modifier = Modifier.testTag("project_share_status")
+                    )
+                }
                 IconButton(onClick = onExitProjectContext, modifier = Modifier.size(20.dp)) {
                     Icon(
                         imageVector = Icons.Default.Close,

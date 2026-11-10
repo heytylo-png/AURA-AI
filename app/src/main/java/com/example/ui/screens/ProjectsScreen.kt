@@ -62,6 +62,8 @@ import com.example.data.model.MilestoneEntity
 import com.example.data.model.ProjectEntity
 import com.example.data.model.ProjectStatus
 import com.example.viewmodel.AuraViewModel
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.heightIn
 
 @Composable
 fun ProjectsScreen(
@@ -200,6 +202,10 @@ fun ProjectCard(
         allTodos.filter { it.projectId == project.id && !it.done }.sortedWith(com.example.data.model.TodoRules.openOrder)
     }
     var showAddArtifactDialog by remember { mutableStateOf(false) }
+    var editingNote by remember { mutableStateOf<ProjectArtifactEntity?>(null) }
+    val sharedProjectIds by viewModel.sharedProjectIds.collectAsState()
+    val cloudChatEnabled by viewModel.cloudChatEnabled.collectAsState()
+    val projectShared = project.id in sharedProjectIds
     var statusMenuExpanded by remember { mutableStateOf(false) }
 
     Card(
@@ -365,7 +371,7 @@ fun ProjectCard(
             if (artifacts.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "Documents & Artifacts (${artifacts.size})",
+                    text = "Notes & documents (${artifacts.size}) \u00B7 tap to open",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -377,6 +383,8 @@ fun ProjectCard(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
+                                .clickable { editingNote = art }
+                                .testTag("project_note_${art.id}")
                                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
                                 .padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -419,6 +427,30 @@ fun ProjectCard(
                         }
                     }
                 }
+            }
+
+            // Sharing with Claude: off for every project until the user turns it on.
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text("Share with Claude in this project's chat", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        text = when {
+                            !cloudChatEnabled -> "Cloud chat is off in Settings."
+                            projectShared -> "Claude sees this project's description, milestones, open to-dos and notes (newest first, up to about 18,000 characters) when you chat here."
+                            else -> "Off: Claude can't see this project."
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                androidx.compose.material3.Switch(
+                    checked = projectShared,
+                    onCheckedChange = { viewModel.setProjectShared(project.id, it) },
+                    enabled = cloudChatEnabled,
+                    colors = com.example.ui.theme.auraSwitchColors(),
+                    modifier = Modifier.testTag("project_share_${project.id}")
+                )
             }
 
             // Open to-dos for this project (managed in the Tasks tab).
@@ -479,7 +511,7 @@ fun ProjectCard(
                     TextButton(onClick = { showAddArtifactDialog = true }) {
                         Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("+ Doc", fontSize = 11.sp)
+                        Text("+ Note", fontSize = 11.sp)
                     }
                 }
 
@@ -523,6 +555,7 @@ fun ProjectCard(
 
     if (showAddArtifactDialog) {
         AddArtifactDialog(
+            viewModel = viewModel,
             onDismiss = { showAddArtifactDialog = false },
             onConfirm = { title, content, type ->
                 viewModel.addArtifact(project.id, title, content, type)
@@ -530,49 +563,94 @@ fun ProjectCard(
             }
         )
     }
+
+    editingNote?.let { note ->
+        AddArtifactDialog(
+            viewModel = viewModel,
+            initial = note,
+            onDismiss = { editingNote = null },
+            onConfirm = { title, content, _ ->
+                viewModel.updateArtifact(note, title, content)
+                editingNote = null
+            },
+            onDelete = {
+                viewModel.deleteArtifact(note)
+                editingNote = null
+            }
+        )
+    }
 }
 
+/** Add or edit a project note. Text files can be imported into it. */
 @Composable
 fun AddArtifactDialog(
+    viewModel: AuraViewModel,
     onDismiss: () -> Unit,
-    onConfirm: (String, String, String) -> Unit
+    onConfirm: (String, String, String) -> Unit,
+    initial: ProjectArtifactEntity? = null,
+    onDelete: (() -> Unit)? = null
 ) {
-    var title by remember { mutableStateOf("") }
-    var content by remember { mutableStateOf("") }
+    var title by remember { mutableStateOf(initial?.title ?: "") }
+    var content by remember { mutableStateOf(initial?.content ?: "") }
+    var type by remember { mutableStateOf(initial?.type ?: "NOTE") }
+    var importError by remember { mutableStateOf<String?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val pickFile = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) scope.launch {
+            viewModel.readTextFile(uri)
+                .onSuccess { (name, text) ->
+                    if (title.isBlank()) title = name
+                    content = if (content.isBlank()) text else content + "\n\n" + text
+                    type = "FILE"
+                    importError = null
+                }
+                .onFailure { importError = it.message ?: "Couldn't read that file." }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add Project Document / Note", style = MaterialTheme.typography.titleMedium) },
+        title = { Text(if (initial == null) "New note" else "Note", style = MaterialTheme.typography.titleMedium) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Document Title") },
-                    placeholder = { Text("e.g. Architecture Overview") },
-                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Title") },
+                    modifier = Modifier.fillMaxWidth().testTag("note_title_field"),
                     singleLine = true
                 )
                 OutlinedTextField(
                     value = content,
                     onValueChange = { content = it },
-                    label = { Text("Content / Notes") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3
+                    label = { Text("Note") },
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).testTag("note_content_field"),
+                    minLines = 4
                 )
+                TextButton(onClick = { pickFile.launch(arrayOf("text/*", "application/json", "application/xml", "application/octet-stream")) }) {
+                    Text("Import a text file (.txt, .md, .csv, code)")
+                }
+                importError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                if (onDelete != null) {
+                    if (!confirmDelete) {
+                        TextButton(onClick = { confirmDelete = true }) { Text("Delete note", color = MaterialTheme.colorScheme.error) }
+                    } else {
+                        TextButton(onClick = onDelete, modifier = Modifier.testTag("note_delete_confirm")) {
+                            Text("Delete permanently (can't be undone)", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
-            Button(
-                onClick = { if (title.isNotBlank()) onConfirm(title, content, "NOTE") },
-                enabled = title.isNotBlank()
-            ) {
-                Text("Save Document")
+            Button(onClick = { if (title.isNotBlank()) onConfirm(title, content, type) }, enabled = title.isNotBlank(), modifier = Modifier.testTag("note_save_button")) {
+                Text("Save")
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
