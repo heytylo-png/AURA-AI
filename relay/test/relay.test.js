@@ -186,7 +186,7 @@ test("request bodies are validated", () => {
     { messages: [{ role: "assistant", content: "hi" }] },
     { messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }] },
     { messages: Array.from({ length: 41 }, () => ({ role: "user", content: "x" })) },
-    { system: "x".repeat(8001), messages: [{ role: "user", content: "x" }] },
+    { system: "x".repeat(32_001), messages: [{ role: "user", content: "x" }] },
     { messages: [{ role: "user", content: "x".repeat(100_001) }] },
   ];
   for (const b of bad) assert.throws(() => validateChatBody(b), RelayError);

@@ -145,6 +145,19 @@ class AuraViewModel @JvmOverloads constructor(
     private val _shareTodos = MutableStateFlow(privacyPrefs.getBoolean("share_open_todos", false))
     val shareTodos: StateFlow<Boolean> = _shareTodos.asStateFlow()
 
+    // Projects the user chose to share with Claude while chatting in them (off for every project
+    // by default). Stored as IDs; removed when the project is deleted.
+    private val _sharedProjectIds = MutableStateFlow(
+        privacyPrefs.getStringSet("shared_project_ids", emptySet()).orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
+    )
+    val sharedProjectIds: StateFlow<Set<Long>> = _sharedProjectIds.asStateFlow()
+
+    fun setProjectShared(projectId: Long, shared: Boolean) {
+        val next = if (shared) _sharedProjectIds.value + projectId else _sharedProjectIds.value - projectId
+        privacyPrefs.edit().putStringSet("shared_project_ids", next.map { it.toString() }.toSet()).apply()
+        _sharedProjectIds.value = next
+    }
+
     fun setShareTodos(enabled: Boolean) {
         privacyPrefs.edit().putBoolean("share_open_todos", enabled).apply()
         _shareTodos.value = enabled
@@ -598,6 +611,14 @@ class AuraViewModel @JvmOverloads constructor(
             val openTodosNow = if (shareTodos.value) todoDao.getOpen() else emptyList()
             val sharedTodoList = com.example.ai.CloudTodos.from(openTodosNow)
             val sharedTodoTotal = com.example.ai.CloudTodos.openCount(openTodosNow)
+            val sharedProject = currentProj?.takeIf { it.id in sharedProjectIds.value }?.let { p ->
+                com.example.ai.CloudProjects.from(
+                    project = p,
+                    milestones = projectRepository.getMilestonesForProjectList(p.id),
+                    todos = todoDao.getOpen(),
+                    notes = projectRepository.getArtifactsForProject(p.id).first()
+                )
+            }
 
             // 1. Insert User Message
             val userMsg = ChatMessageEntity(
@@ -634,7 +655,8 @@ class AuraViewModel @JvmOverloads constructor(
                 sharePersonalContext = sharePersonalContext.value,
                 allowProposals = claudeProposals.value,
                 sharedTodos = sharedTodoList,
-                sharedTodosTotal = sharedTodoTotal
+                sharedTodosTotal = sharedTodoTotal,
+                sharedProject = sharedProject
             ).collect { state ->
                 when (state) {
                     is HybridAiState.Starting -> {}
@@ -798,6 +820,8 @@ class AuraViewModel @JvmOverloads constructor(
             projectRepository.deleteProject(project)
             // Its to-dos stay, just without a project.
             todoDao.clearProject(project.id)
+            // A later project could reuse the ID; it must not inherit sharing.
+            setProjectShared(project.id, false)
         }
     }
 
@@ -833,6 +857,33 @@ class AuraViewModel @JvmOverloads constructor(
                     type = type
                 )
             )
+        }
+    }
+
+    fun updateArtifact(artifact: ProjectArtifactEntity, title: String, content: String) {
+        if (title.isBlank()) return
+        viewModelScope.launch { projectRepository.updateArtifact(artifact.copy(title = title.trim(), content = content)) }
+    }
+
+    /** Reads a text file the user picked into a project note. Returns a reason on failure. */
+    suspend fun readTextFile(uri: android.net.Uri): Result<Pair<String, String>> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching {
+            val resolver = getApplication<Application>().contentResolver
+            val name = resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            } ?: "Imported file"
+            val bytes = resolver.openInputStream(uri)?.use { input ->
+                val buffer = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(8192)
+                while (true) {
+                    val n = input.read(chunk)
+                    if (n < 0) break
+                    buffer.write(chunk, 0, n)
+                    if (buffer.size() > com.example.data.model.NoteImport.MAX_BYTES) throw IllegalArgumentException("That file is larger than 200 KB. Only text files up to 200 KB can be added.")
+                }
+                buffer.toByteArray()
+            } ?: throw IllegalArgumentException("Couldn't open that file.")
+            name to com.example.data.model.NoteImport.decode(bytes)
         }
     }
 

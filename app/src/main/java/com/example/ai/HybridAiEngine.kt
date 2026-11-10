@@ -79,7 +79,9 @@ class HybridAiEngine(
         /** Open to-dos to share, already chosen by the user's "Share open to-dos" switch (empty = off). */
         sharedTodos: List<CloudTodo> = emptyList(),
         /** Total open to-dos, when [sharedTodos] may be capped. */
-        sharedTodosTotal: Int = sharedTodos.size
+        sharedTodosTotal: Int = sharedTodos.size,
+        /** Set only when the user shared the project being chatted in. */
+        sharedProject: CloudProject? = null
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
@@ -149,7 +151,8 @@ class HybridAiEngine(
             allowProposals = allowProposals
         ).forCloud(sharePersonalContext).copy(
             openTodos = sharedTodos.take(CloudTodos.MAX),
-            openTodosTotal = if (sharedTodos.isEmpty()) 0 else maxOf(sharedTodosTotal, sharedTodos.take(CloudTodos.MAX).size)
+            openTodosTotal = if (sharedTodos.isEmpty()) 0 else maxOf(sharedTodosTotal, sharedTodos.take(CloudTodos.MAX).size),
+            sharedProject = sharedProject
         )
 
         var streamedText = ""

@@ -22,7 +22,8 @@ const DEFAULT_MODEL = "claude-sonnet-5-5";
 const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 const MAX_MESSAGES = 40;
 const MAX_TOTAL_CHARS = 100_000;
-const MAX_SYSTEM_CHARS = 8_000;
+// Room for a shared project's notes (the app sends at most ~18k characters of notes).
+const MAX_SYSTEM_CHARS = 32_000;
 const CLOCK_SKEW_SECONDS = 60;
 
 // Changes Claude may PROPOSE. Defined here, never taken from the app, so a modified app cannot
