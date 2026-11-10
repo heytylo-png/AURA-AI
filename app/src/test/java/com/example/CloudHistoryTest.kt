@@ -18,6 +18,20 @@ class CloudHistoryTest {
     private fun a(text: String) = ChatTurn(ChatTurn.Role.ASSISTANT, text)
 
     @Test
+    fun afterSharingIsTurnedOffOlderExchangesAreNotSent() {
+        // Owner report (#46): with project sharing turned off, Claude could still see the project's
+        // to-dos because its earlier reply listing them was sent back as history.
+        val messages = listOf(
+            ChatMessageEntity(sender = Sender.USER, text = "what are my to-dos?", timestamp = 100),
+            ChatMessageEntity(sender = Sender.AI, text = "Buy soil, edit video", modelUsed = AiModelUsed.CLOUD, timestamp = 110),
+            ChatMessageEntity(sender = Sender.USER, text = "and now?", timestamp = 300),
+            ChatMessageEntity(sender = Sender.AI, text = "I can't see them", modelUsed = AiModelUsed.CLOUD, timestamp = 310)
+        )
+        assertEquals(listOf(u("and now?"), a("I can't see them")), CloudHistory.fromMessages(messages, since = 200))
+        assertEquals(4, CloudHistory.fromMessages(messages).size)
+    }
+
+    @Test
     fun keepsCloudExchangesInOrder() {
         val history = CloudHistory.fromMessages(
             listOf(user("q1"), ai("a1", AiModelUsed.CLOUD), user("q2"), ai("a2", AiModelUsed.CLOUD))

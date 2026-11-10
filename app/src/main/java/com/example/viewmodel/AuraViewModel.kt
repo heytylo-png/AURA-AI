@@ -125,7 +125,19 @@ class AuraViewModel @JvmOverloads constructor(
     private val _sharePersonalContext = MutableStateFlow(privacyPrefs.getBoolean("share_personal_context", false))
     val sharePersonalContext: StateFlow<Boolean> = _sharePersonalContext.asStateFlow()
 
+    /**
+     * When the user stops sharing something, earlier messages in their chats may still quote it
+     * (e.g. Claude listing a project's to-dos). From this moment, only newer messages are sent to
+     * Claude as conversation history, so turning sharing off really stops it (owner report, #46).
+     */
+    private fun markSharingReduced() {
+        privacyPrefs.edit().putLong(HISTORY_CUTOFF_KEY, System.currentTimeMillis()).apply()
+    }
+
+    private fun historyCutoff(): Long = privacyPrefs.getLong(HISTORY_CUTOFF_KEY, 0L)
+
     fun setSharePersonalContext(enabled: Boolean) {
+        if (!enabled && _sharePersonalContext.value) markSharingReduced()
         privacyPrefs.edit().putBoolean("share_personal_context", enabled).apply()
         _sharePersonalContext.value = enabled
     }
@@ -153,12 +165,14 @@ class AuraViewModel @JvmOverloads constructor(
     val sharedProjectIds: StateFlow<Set<Long>> = _sharedProjectIds.asStateFlow()
 
     fun setProjectShared(projectId: Long, shared: Boolean) {
+        if (!shared && projectId in _sharedProjectIds.value) markSharingReduced()
         val next = if (shared) _sharedProjectIds.value + projectId else _sharedProjectIds.value - projectId
         privacyPrefs.edit().putStringSet("shared_project_ids", next.map { it.toString() }.toSet()).apply()
         _sharedProjectIds.value = next
     }
 
     fun setShareTodos(enabled: Boolean) {
+        if (!enabled && _shareTodos.value) markSharingReduced()
         privacyPrefs.edit().putBoolean("share_open_todos", enabled).apply()
         _shareTodos.value = enabled
     }
@@ -607,7 +621,7 @@ class AuraViewModel @JvmOverloads constructor(
             val earlier = chatRepository.getMessagesForSession(currentSessionId).first()
             val linkedActions = earlier.mapNotNull { it.proposedActionId }.distinct()
                 .mapNotNull { taskActionDao.getActionById(it) }.associateBy { it.id }
-            val cloudHistory = CloudHistory.fromMessages(earlier, actions = linkedActions)
+            val cloudHistory = CloudHistory.fromMessages(earlier, actions = linkedActions, since = historyCutoff())
             val openTodosNow = if (shareTodos.value) todoDao.getOpen() else emptyList()
             val sharedTodoList = com.example.ai.CloudTodos.from(openTodosNow)
             val sharedTodoTotal = com.example.ai.CloudTodos.openCount(openTodosNow)
@@ -752,6 +766,7 @@ class AuraViewModel @JvmOverloads constructor(
     /** Marks or unmarks a memory as OK to send to Claude. */
     fun toggleMemoryShare(memory: MemoryEntity) {
         viewModelScope.launch {
+            if (memory.shareWithCloud) markSharingReduced()
             memoryRepository.updateMemory(memory.copy(shareWithCloud = !memory.shareWithCloud))
         }
     }
@@ -947,3 +962,6 @@ class AuraViewModel @JvmOverloads constructor(
         voiceManager.cleanup()
     }
 }
+
+/** Privacy setting: conversation history older than this (epoch ms) is never sent to Claude. */
+private const val HISTORY_CUTOFF_KEY = "cloud_history_since"

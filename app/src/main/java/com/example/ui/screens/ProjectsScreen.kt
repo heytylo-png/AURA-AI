@@ -438,7 +438,7 @@ fun ProjectCard(
                         text = when {
                             !cloudChatEnabled -> "Cloud chat is off in Settings."
                             projectShared -> "Claude sees this project's description, milestones, open to-dos and notes (newest first, up to about 18,000 characters) when you chat here."
-                            else -> "Off: Claude can't see this project."
+                            else -> "Off: Claude can't see this project. Turning it off also stops earlier chat messages (which may mention it) from being sent."
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
