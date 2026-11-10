@@ -489,46 +489,54 @@ fun ProjectCard(
 
             Spacer(Modifier.height(12.dp))
 
-            // Action row
+            // Action row: add buttons on one line, the chat button full width below, so nothing is
+            // squeezed on narrow phones (the chat label used to wrap one letter per line).
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row {
-                    TextButton(onClick = { showAddMilestoneDialog = true }) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("+ Milestone", fontSize = 11.sp)
-                    }
-
-                    TextButton(onClick = { showAddTodoDialog = true }, modifier = Modifier.testTag("project_add_todo_${project.id}")) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("+ To-do", fontSize = 11.sp)
-                    }
-
-                    TextButton(onClick = { showAddArtifactDialog = true }) {
-                        Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("+ Note", fontSize = 11.sp)
-                    }
+                TextButton(onClick = { showAddMilestoneDialog = true }, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp)) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(2.dp))
+                    Text("Milestone", fontSize = 12.sp, maxLines = 1)
                 }
-
-                OutlinedButton(
-                    onClick = onChatWithProject,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.testTag("chat_project_btn_${project.id}")
+                TextButton(
+                    onClick = { showAddTodoDialog = true },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp),
+                    modifier = Modifier.testTag("project_add_todo_${project.id}")
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Chat,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text("Chat in Scope", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(2.dp))
+                    Text("To-do", fontSize = 12.sp, maxLines = 1)
                 }
+                TextButton(
+                    onClick = { showAddArtifactDialog = true },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp),
+                    modifier = Modifier.testTag("project_add_note_${project.id}")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(2.dp))
+                    Text("Note", fontSize = 12.sp, maxLines = 1)
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = onChatWithProject,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth().testTag("chat_project_btn_${project.id}")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Chat,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (projectShared) "Chat about this project" else "Chat in this project",
+                    fontSize = 13.sp, maxLines = 1, color = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }
