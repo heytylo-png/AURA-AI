@@ -27,5 +27,5 @@ object NoteImport {
         return clean.take(MAX_CHARS)
     }
 
-    private const val NOT_TEXT = "That doesn't look like a text file. Text, Markdown, CSV and code files work; PDFs, Word files and images don't yet."
+    private const val NOT_TEXT = "That doesn't look like a text file. Text, Markdown, CSV, code and PDF files work; Word files and images don't yet."
 }
