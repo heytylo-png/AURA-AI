@@ -31,12 +31,15 @@ object CloudHistory {
         maxExchanges: Int = MAX_EXCHANGES,
         maxChars: Int = MAX_CHARS,
         /** Actions linked to replies (by id), so Claude learns what happened to its proposals. */
-        actions: Map<Long, TaskActionEntity> = emptyMap()
+        actions: Map<Long, TaskActionEntity> = emptyMap(),
+        /** Only messages from this time on (epoch ms): set when the user turns a sharing switch off. */
+        since: Long = 0L
     ): List<ChatTurn> {
         val exchanges = mutableListOf<Pair<String, String>>()
         for (i in 0 until messages.size - 1) {
             val user = messages[i]
             val reply = messages[i + 1]
+            if (user.timestamp < since || reply.timestamp < since) continue
             if (user.sender == Sender.USER && user.text.isNotBlank() &&
                 reply.sender == Sender.AI && reply.modelUsed == AiModelUsed.CLOUD && reply.text.isNotBlank()
             ) {
