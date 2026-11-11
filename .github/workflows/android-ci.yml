@@ -109,3 +109,38 @@ jobs:
             app/build/test-results/testDebugUnitTest/
             app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: warn
+
+  # Puts the newest main build at one fixed link that installs directly on a phone:
+  #   https://github.com/heytylo-png/aura-ai/releases/download/latest-debug/aura-debug.apk
+  # Separate job so only this small step gets write access (the build job stays read-only).
+  publish-latest-apk:
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: publish-latest-apk
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download the APK from this run
+        run: |
+          gh run download "${{ github.run_id }}" --name aura-debug-apk --dir apk
+          apk="$(ls apk/*.apk | head -n 1)"
+          test -s "$apk"
+          mv "$apk" aura-debug.apk
+
+      - name: Update the "latest-debug" release
+        run: |
+          short="${GITHUB_SHA::7}"
+          notes="Newest debug build of Aura from main ($short, $(date -u +'%Y-%m-%d %H:%M UTC')). Install aura-debug.apk directly on the phone."
+          if ! gh release view latest-debug >/dev/null 2>&1; then
+            gh release create latest-debug --title "Latest debug build" --notes "$notes" --prerelease --target "$GITHUB_SHA"
+          else
+            gh release edit latest-debug --notes "$notes"
+          fi
+          gh release upload latest-debug aura-debug.apk --clobber
