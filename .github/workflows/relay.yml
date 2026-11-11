@@ -9,6 +9,8 @@ on:
     paths: ['relay/**', '.github/workflows/relay.yml']
   workflow_dispatch:
 
+# Actions are pinned to exact commits (the tag is in the comment), so a changed tag can't
+# swap in different code next to the signing key or deploy token.
 permissions:
   contents: read
 
@@ -21,10 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
 
@@ -61,7 +63,7 @@ jobs:
 
       - name: Deploy relay to Cloudflare
         if: steps.secrets.outputs.ready == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Until you add your access ID, a placeholder keeps the allowlist effectively empty.

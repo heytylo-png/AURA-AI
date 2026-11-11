@@ -8,8 +8,9 @@ import com.example.data.model.UserSettingsEntity
 /**
  * Builds Aura's system prompt for cloud models. Provider-neutral.
  *
- * Personal context (profile, memories, project) is only included when the caller passes it;
- * [AiProviderRequest.withoutPersonalContext] strips it before any cloud request today.
+ * Personal context is only included when the caller passes it. [AiProviderRequest.forCloud]
+ * decides what that is: nothing personal by default; with the user's sharing switches, their name
+ * and main interest, the memories they marked, their open to-dos, and the one project they shared.
  */
 object AuraPrompt {
 
@@ -115,8 +116,8 @@ object AuraPrompt {
             }
             sharedProject.notes.forEach { note ->
                 appendLine()
-                appendLine("<<NOTE: ${note.title}>>")
-                appendLine(note.content)
+                appendLine("<<NOTE: ${inert(note.title)}>>")
+                appendLine(inert(note.content))
                 if (note.clipped) appendLine("[the rest of this note was not sent]")
                 appendLine("<<END NOTE>>")
             }
@@ -133,4 +134,11 @@ object AuraPrompt {
             appendLine("Description: ${currentProject.description}")
         }
     }.trim()
+
+    /**
+     * Notes can come from imported files. This keeps their text from containing the markers that
+     * frame a note, so a document can't pretend its note has ended and that what follows is
+     * instructions (audit 03, A3-15).
+     */
+    internal fun inert(text: String): String = text.replace("<<", "\u2039\u2039").replace(">>", "\u203a\u203a")
 }

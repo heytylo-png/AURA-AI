@@ -114,6 +114,7 @@ class ClaudeRelayProvider(
             var toolName: String? = null
             val toolInput = StringBuilder()
             var toolCall: ToolCall? = null
+            var stopReason: String? = null
             while (true) {
                 currentCoroutineContext().ensureActive()
                 val line = try {
@@ -144,11 +145,17 @@ class ClaudeRelayProvider(
                         toolCall = ToolCall(toolName.orEmpty(), toolInput.toString())
                         toolIndex = null
                     }
+                    is SseEvent.StopReason -> stopReason = event.reason
                     SseEvent.Stop -> {
                         if (text.isBlank() && toolCall == null) {
                             emit(AiProviderEvent.Error("Claude returned an empty reply."))
                         } else {
-                            emit(AiProviderEvent.Completed(text.toString(), clock() - startedAt, toolCall = toolCall))
+                            emit(
+                                AiProviderEvent.Completed(
+                                    text.toString(), clock() - startedAt, toolCall = toolCall,
+                                    cutOff = stopReason == "max_tokens"
+                                )
+                            )
                         }
                         return@flow
                     }
@@ -186,6 +193,8 @@ class ClaudeRelayProvider(
         data class ToolStart(val index: Int, val name: String) : SseEvent
         data class ToolInput(val index: Int, val partialJson: String) : SseEvent
         data class BlockStop(val index: Int) : SseEvent
+        /** Why the model stopped ("end_turn", "tool_use", "max_tokens"...), sent just before [Stop]. */
+        data class StopReason(val reason: String) : SseEvent
         data object Stop : SseEvent
     }
 
@@ -244,6 +253,8 @@ class ClaudeRelayProvider(
                     }
                 }
                 "content_block_stop" -> SseEvent.BlockStop(index)
+                "message_delta" -> obj.optJSONObject("delta")?.optString("stop_reason")
+                    ?.takeIf { it.isNotBlank() && it != "null" }?.let { SseEvent.StopReason(it) }
                 "message_stop" -> SseEvent.Stop
                 "error" -> SseEvent.Error(obj.optJSONObject("error")?.optString("message")?.ifBlank { null } ?: "unknown error")
                 else -> null

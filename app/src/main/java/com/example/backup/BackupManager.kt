@@ -93,9 +93,11 @@ class BackupManager(private val context: Context) {
         staged.writeBytes(db)
 
         AppDatabase.closeDatabase()
-        // Keep the current data as a safety copy until the next restore.
+        // Keep the current data as a safety copy for a while (see [removeOldSafetyCopy]).
         previous.delete(); File(previous.path + "-wal").delete(); File(previous.path + "-shm").delete()
         if (live.exists() && !live.renameTo(previous)) throw BackupCrypto.BackupException("Couldn't set the current data aside; nothing was changed.")
+        // Renaming keeps the file's old date; stamp it with now so its age counts from this restore.
+        previous.setLastModified(System.currentTimeMillis())
         File(live.path + "-wal").renameTo(File(previous.path + "-wal"))
         File(live.path + "-shm").delete()
         File(live.path + "-journal").delete()
@@ -202,6 +204,24 @@ class BackupManager(private val context: Context) {
             } else if (staged.exists()) {
                 staged.delete()
             }
+        }
+
+        /** How long the pre-restore safety copy (unencrypted, in Aura's private storage) is kept. */
+        const val SAFETY_COPY_DAYS = 7
+
+        /**
+         * Removes the safety copy once it is older than [SAFETY_COPY_DAYS], so data replaced by a
+         * restore (including things deleted since) doesn't stay on the phone forever. Call after
+         * [finishInterruptedRestore]; does nothing while the copy might still be needed to recover.
+         */
+        fun removeOldSafetyCopy(context: Context, now: Long = System.currentTimeMillis()) {
+            val live = context.getDatabasePath(AppDatabase.DATABASE_NAME)
+            val previous = File(live.path + PREVIOUS)
+            if (!live.exists() || !previous.exists()) return
+            if (now - previous.lastModified() < SAFETY_COPY_DAYS * 86_400_000L) return
+            previous.delete()
+            File(previous.path + "-wal").delete()
+            File(previous.path + "-shm").delete()
         }
 
         /** Relaunches Aura so every screen reopens the restored data. */

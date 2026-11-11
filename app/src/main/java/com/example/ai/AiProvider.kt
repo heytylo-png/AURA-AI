@@ -54,7 +54,9 @@ sealed interface AiProviderEvent {
         val latencyMs: Long,
         val modelName: String? = null,
         /** A change Claude proposed with a tool in this reply; becomes an approval card after checks. */
-        val toolCall: ToolCall? = null
+        val toolCall: ToolCall? = null,
+        /** The model stopped because it hit the output length limit, so the reply is incomplete. */
+        val cutOff: Boolean = false
     ) : AiProviderEvent
     data class Error(val message: String) : AiProviderEvent
 }

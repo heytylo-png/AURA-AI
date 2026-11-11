@@ -36,4 +36,8 @@ interface ChatMessageDao {
 
     @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun clearSessionChat(sessionId: Long)
+
+    /** Messages of every chat that belongs to a project (used when the project is deleted). */
+    @Query("DELETE FROM chat_messages WHERE sessionId IN (SELECT id FROM chat_sessions WHERE associatedProjectId = :projectId)")
+    suspend fun deleteForProjectChats(projectId: Long)
 }

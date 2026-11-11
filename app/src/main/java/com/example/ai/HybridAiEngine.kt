@@ -187,17 +187,20 @@ class HybridAiEngine(
                 val dropped = (proposal as? CloudProposals.Result.Dropped)?.let {
                     " Claude suggested a change, but it was not shown because ${it.problem}."
                 }.orEmpty()
-                val text = done.fullText.ifBlank {
+                val body = done.fullText.ifBlank {
                     if (card != null) "I've suggested a change below. Nothing happens unless you approve it."
                     else "Claude suggested a change that Aura couldn't show."
                 }
+                // The relay caps how long a reply may be; say so instead of showing a cut-off answer as whole.
+                val text = if (done.cutOff) "$body\n\n\u26a0 $CUT_OFF_NOTE" else body
+                val cutOffNote = if (done.cutOff) " The reply reached the length limit and was cut off." else ""
                 emit(
                     HybridAiState.Completed(
                         fullText = text,
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
                         reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " +
-                            sentSummary(history, providerRequest) + dropped,
+                            sentSummary(history, providerRequest) + dropped + cutOffNote,
                         proposedAction = card
                     )
                 )
@@ -238,7 +241,7 @@ class HybridAiEngine(
     }
 
     /** Says exactly what went to the cloud, for the message's details sheet. */
-    private fun sentSummary(history: List<ChatTurn>, sent: AiProviderRequest): String {
+    internal fun sentSummary(history: List<ChatTurn>, sent: AiProviderRequest): String {
         val earlier = history.count { it.role == ChatTurn.Role.USER }
         val parts = mutableListOf(
             if (earlier == 0) "this message" else
@@ -255,10 +258,23 @@ class HybridAiEngine(
             parts += "$n open to-do${if (n == 1) "" else "s"}" +
                 (if (sent.openTodosTotal > n) " of ${sent.openTodosTotal}" else "") + " (titles and due dates)"
         }
+        val project = sent.sharedProject
+        if (project != null) {
+            val contents = mutableListOf("description")
+            if (project.milestones.isNotEmpty()) contents += plural(project.milestones.size, "milestone")
+            if (project.openTodos.isNotEmpty()) contents += plural(project.openTodos.size, "open to-do")
+            if (project.notes.isNotEmpty()) {
+                val clipped = project.notes.count { it.clipped }
+                contents += plural(project.notes.size, "note") + (if (clipped > 0) " ($clipped shortened)" else "")
+            }
+            parts += "the project \"${project.title}\" you shared (${contents.joinToString(", ")})" +
+                (if (project.notesLeftOut.isNotEmpty()) "; ${plural(project.notesLeftOut.size, "note")} didn't fit and stayed on the phone" else "")
+        }
+        val projects = if (project != null) "your other projects" else "projects"
         val notSent = if (sent.allowPersonalContext)
-            "Not sent: memories you didn't mark, projects, custom directives."
+            "Not sent: memories you didn't mark, $projects, custom directives."
         else
-            "Not sent: memories, projects, profile, custom directives."
+            "Not sent: memories, $projects, profile, custom directives."
         return "Sent: ${parts.joinToString(", ")}. $notSent"
     }
 
@@ -271,7 +287,11 @@ class HybridAiEngine(
         proposedAction = null
     )
 
-    private companion object {
+    private fun plural(n: Int, word: String) = "$n $word${if (n == 1) "" else "s"}"
+
+    internal companion object {
+        const val CUT_OFF_NOTE = "This answer was cut off because it reached the length limit. Ask Claude to continue."
+
         /** Typed commands handled on the phone in Auto mode (see [shouldRouteToLocal]). */
         val LOCAL_COMMANDS = listOf(
             "remember that ", "remember:", "remember i ", "remember my ",

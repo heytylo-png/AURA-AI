@@ -124,7 +124,8 @@ fun BackupCard(viewModel: AuraViewModel) {
                     "Backup from ${TodoRules.formatDue(TodoRules.today(summary.createdAt))}: ${summary.memories} memories, " +
                         "${summary.chats} chats, ${summary.todos} to-dos, ${summary.projects} projects.\n\n" +
                         "Everything currently in Aura on this phone will be replaced, and Aura will restart. " +
-                        "The current data is kept as a safety copy on this phone until the next restore.\n\n" +
+                        "Aura's settings also go back to how they were in the backup, including what you had chosen to share with Claude. " +
+                        "The current data is kept as a safety copy on this phone for ${com.example.backup.BackupManager.SAFETY_COPY_DAYS} days.\n\n" +
                         "If this is a new phone, Claude needs its new access ID added to the relay again (Settings shows it)."
                 )
             },

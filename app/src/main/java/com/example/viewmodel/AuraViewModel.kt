@@ -192,15 +192,20 @@ class AuraViewModel @JvmOverloads constructor(
     }
     private var speechJob: kotlinx.coroutines.Job? = null
 
-    /** Reads a reply aloud: the ElevenLabs voice when switched on, else (or on failure) the phone's voice. */
-    fun speakReply(markdown: String) {
+    /**
+     * Reads a reply aloud. The ElevenLabs voice is used only for replies that came from Claude
+     * ([fromCloud]) and only when it is switched on; on failure the phone's voice reads it instead.
+     * Replies answered on this phone are always read by the phone's voice, so text that was kept on
+     * the phone (such as a list of memories) is never sent to ElevenLabs (audit 03, A3-02).
+     */
+    fun speakReply(markdown: String, fromCloud: Boolean) {
         val text = com.example.voice.SpeechText.prepare(markdown)
         if (text.isBlank()) return
         val pitch = _identity.value.voicePitch
         val speed = _identity.value.voiceSpeed
         speechJob?.cancel()
         voiceManager.stopAll()
-        if (!_elevenLabsVoice.value || !cloudChatEnabled.value) {
+        if (!fromCloud || !_elevenLabsVoice.value || !cloudChatEnabled.value) {
             phoneVoice(text, pitch, speed)
             return
         }
@@ -250,8 +255,12 @@ class AuraViewModel @JvmOverloads constructor(
         _backupState.value = BackupUiState.Idle
     }
 
-    private fun backupError(e: Throwable): String =
-        (e as? com.example.backup.BackupCrypto.BackupException)?.message ?: "Something went wrong (${e.message ?: e.javaClass.simpleName})."
+    private fun backupError(e: Throwable): String = when (e) {
+        is com.example.backup.BackupCrypto.BackupException -> e.message ?: "Something went wrong."
+        // Backups are built in memory; a very large library can be too big for this phone.
+        is OutOfMemoryError -> "There is too much data for this phone to handle in one backup. Deleting large project notes or old chats makes it smaller."
+        else -> "Something went wrong (${e.message ?: e.javaClass.simpleName})."
+    }
 
     fun exportBackup(uri: android.net.Uri, passphrase: CharArray) {
         _backupState.value = BackupUiState.Working("Encrypting your backup\u2026")
@@ -259,7 +268,7 @@ class AuraViewModel @JvmOverloads constructor(
             _backupState.value = try {
                 backupManager.writeBackup(uri, passphrase)
                 BackupUiState.Done("Backup saved. Keep the passphrase somewhere safe: without it the backup can't be opened.")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 BackupUiState.Failed("Backup not saved. ${backupError(e)}")
             } finally {
                 passphrase.fill(' ')
@@ -274,7 +283,7 @@ class AuraViewModel @JvmOverloads constructor(
                 val (summary, entries) = backupManager.inspect(backupManager.readFile(uri), passphrase)
                 pendingRestore = entries
                 BackupUiState.ConfirmRestore(summary)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 BackupUiState.Failed("Nothing was changed. ${backupError(e)}")
             } finally {
                 passphrase.fill(' ')
@@ -547,6 +556,13 @@ class AuraViewModel @JvmOverloads constructor(
     fun selectSession(session: ChatSessionEntity) {
         _activeSession.value = session
         loadChatMessages()
+        // The chat decides the project: opening a project's chat makes that project active, and
+        // opening any other chat leaves the project, so a shared project is only ever sent in its
+        // own chat and the header always matches the chat on screen (audit 03, A3-08).
+        viewModelScope.launch {
+            val project = session.associatedProjectId?.let { projectRepository.getProjectById(it) }
+            if (_activeSession.value?.id == session.id) _activeProject.value = project
+        }
     }
 
     fun startNewChatSession(title: String = "New Conversation") {
@@ -560,6 +576,7 @@ class AuraViewModel @JvmOverloads constructor(
 
     fun deleteChatSession(session: ChatSessionEntity) {
         viewModelScope.launch {
+            if (_activeSession.value?.id == session.id) cancelSend()
             chatRepository.deleteSession(session.id)
             if (_activeSession.value?.id == session.id) {
                 val remaining = recentSessions.value.filter { it.id != session.id }
@@ -608,120 +625,168 @@ class AuraViewModel @JvmOverloads constructor(
     fun sendMessage(text: String) {
         if (text.isBlank() || _isGenerating.value) return
         val currentProj = _activeProject.value
+        // Set before anything else runs, so a second tap can't send the message twice.
+        _isGenerating.value = true
+        _currentStreamingText.value = ""
+        _streamingModelUsed.value = null
 
-        viewModelScope.launch {
-            if (_activeSession.value == null) {
-                val newId = chatRepository.createNewSession(title = "New Conversation", projectId = currentProj?.id)
-                _activeSession.value = chatRepository.getSessionById(newId)
-            }
-            val currentSessionId = _activeSession.value?.id ?: 1L
-
-            // Earlier Claude exchanges in this chat, read before the new message is saved.
-            // Only used if this message goes to the cloud.
-            val earlier = chatRepository.getMessagesForSession(currentSessionId).first()
-            val linkedActions = earlier.mapNotNull { it.proposedActionId }.distinct()
-                .mapNotNull { taskActionDao.getActionById(it) }.associateBy { it.id }
-            val cloudHistory = CloudHistory.fromMessages(earlier, actions = linkedActions, since = historyCutoff())
-            val openTodosNow = if (shareTodos.value) todoDao.getOpen() else emptyList()
-            val sharedTodoList = com.example.ai.CloudTodos.from(openTodosNow)
-            val sharedTodoTotal = com.example.ai.CloudTodos.openCount(openTodosNow)
-            val sharedProject = currentProj?.takeIf { it.id in sharedProjectIds.value }?.let { p ->
-                com.example.ai.CloudProjects.from(
-                    project = p,
-                    milestones = projectRepository.getMilestonesForProjectList(p.id),
-                    todos = todoDao.getOpen(),
-                    notes = projectRepository.getArtifactsForProject(p.id).first()
-                )
-            }
-
-            // 1. Insert User Message
-            val userMsg = ChatMessageEntity(
-                sender = Sender.USER,
-                text = text,
-                associatedProjectId = currentProj?.id,
+        val job = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            val thisJob = coroutineContext[kotlinx.coroutines.Job]
+            var sessionId: Long? = null
+            try {
+                if (_activeSession.value == null) {
+                    val newId = chatRepository.createNewSession(title = "New Conversation", projectId = currentProj?.id)
+                    _activeSession.value = chatRepository.getSessionById(newId)
+                }
+                val currentSessionId = _activeSession.value?.id ?: 1L
                 sessionId = currentSessionId
-            )
-            chatRepository.insertMessage(userMsg)
 
-            // Refresh active session snippet/title
-            val updatedSess = chatRepository.getSessionById(currentSessionId)
-            if (updatedSess != null) {
-                _activeSession.value = updatedSess
-            }
+                // Earlier Claude exchanges in this chat, read before the new message is saved.
+                // Only used if this message goes to the cloud.
+                val earlier = chatRepository.getMessagesForSession(currentSessionId).first()
+                val linkedActions = earlier.mapNotNull { it.proposedActionId }.distinct()
+                    .mapNotNull { taskActionDao.getActionById(it) }.associateBy { it.id }
+                val cloudHistory = CloudHistory.fromMessages(earlier, actions = linkedActions, since = historyCutoff())
+                val openTodosNow = if (shareTodos.value) todoDao.getOpen() else emptyList()
+                val sharedTodoList = com.example.ai.CloudTodos.from(openTodosNow)
+                val sharedTodoTotal = com.example.ai.CloudTodos.openCount(openTodosNow)
+                val sharedProject = currentProj?.takeIf { it.id in sharedProjectIds.value }?.let { p ->
+                    com.example.ai.CloudProjects.from(
+                        project = p,
+                        milestones = projectRepository.getMilestonesForProjectList(p.id),
+                        todos = todoDao.getOpen(),
+                        notes = projectRepository.getArtifactsForProject(p.id).first()
+                    )
+                }
 
-            _isGenerating.value = true
-            _currentStreamingText.value = ""
-            _streamingModelUsed.value = null
+                // 1. Insert User Message
+                val userMsg = ChatMessageEntity(
+                    sender = Sender.USER,
+                    text = text,
+                    associatedProjectId = currentProj?.id,
+                    sessionId = currentSessionId
+                )
+                chatRepository.insertMessage(userMsg)
 
-            val memories = memoryRepository.getActiveMemories()
-            val projects = projectRepository.getAllProjectsSnapshot()
+                // Refresh active session snippet/title
+                val updatedSess = chatRepository.getSessionById(currentSessionId)
+                if (updatedSess != null) {
+                    _activeSession.value = updatedSess
+                }
 
-            hybridAiEngine.processHybridRequest(
-                prompt = text,
-                mode = _routingMode.value,
-                identity = _identity.value,
-                activeMemories = memories,
-                projects = projects,
-                currentProject = currentProj,
-                userSettings = userSettings.value,
-                allowCloudRequest = cloudChatEnabled.value,
-                history = cloudHistory,
-                sharePersonalContext = sharePersonalContext.value,
-                allowProposals = claudeProposals.value,
-                sharedTodos = sharedTodoList,
-                sharedTodosTotal = sharedTodoTotal,
-                sharedProject = sharedProject
-            ).collect { state ->
-                when (state) {
-                    is HybridAiState.Starting -> {}
-                    is HybridAiState.Streaming -> {
-                        _currentStreamingText.value = state.text
-                        _streamingModelUsed.value = state.modelUsed
-                    }
-                    is HybridAiState.Completed -> {
-                        _isGenerating.value = false
-                        _currentStreamingText.value = null
-                        _streamingModelUsed.value = null
+                val memories = memoryRepository.getActiveMemories()
+                val projects = projectRepository.getAllProjectsSnapshot()
 
-                        // Save proposed action if any
-                        var actionId: Long? = null
-                        if (state.proposedAction != null) {
-                            actionId = taskActionDao.insertAction(state.proposedAction)
+                hybridAiEngine.processHybridRequest(
+                    prompt = text,
+                    mode = _routingMode.value,
+                    identity = _identity.value,
+                    activeMemories = memories,
+                    projects = projects,
+                    currentProject = currentProj,
+                    userSettings = userSettings.value,
+                    allowCloudRequest = cloudChatEnabled.value,
+                    history = cloudHistory,
+                    sharePersonalContext = sharePersonalContext.value,
+                    allowProposals = claudeProposals.value,
+                    sharedTodos = sharedTodoList,
+                    sharedTodosTotal = sharedTodoTotal,
+                    sharedProject = sharedProject
+                ).collect { state ->
+                    when (state) {
+                        is HybridAiState.Starting -> {}
+                        is HybridAiState.Streaming -> {
+                            _currentStreamingText.value = state.text
+                            _streamingModelUsed.value = state.modelUsed
                         }
+                        is HybridAiState.Completed -> {
+                            _isGenerating.value = false
+                            _currentStreamingText.value = null
+                            _streamingModelUsed.value = null
 
-                        // Save AI message to DB
-                        val aiMsg = ChatMessageEntity(
-                            sender = Sender.AI,
-                            text = state.fullText,
-                            modelUsed = state.modelUsed,
-                            reasoningExplanation = state.reasoningRationale,
-                            associatedProjectId = currentProj?.id,
-                            sessionId = currentSessionId,
-                            proposedActionId = actionId
-                        )
-                        chatRepository.insertMessage(aiMsg)
+                            // Save proposed action if any
+                            var actionId: Long? = null
+                            if (state.proposedAction != null) {
+                                actionId = taskActionDao.insertAction(state.proposedAction)
+                            }
 
-                        // If auto-speak enabled, speak the answer
-                        if (_identity.value.autoSpeakResponses) {
-                            speakReply(state.fullText)
+                            // Save AI message to DB
+                            val aiMsg = ChatMessageEntity(
+                                sender = Sender.AI,
+                                text = state.fullText,
+                                modelUsed = state.modelUsed,
+                                reasoningExplanation = state.reasoningRationale,
+                                associatedProjectId = currentProj?.id,
+                                sessionId = currentSessionId,
+                                proposedActionId = actionId
+                            )
+                            chatRepository.insertMessage(aiMsg)
+
+                            // If auto-speak enabled, speak the answer
+                            if (_identity.value.autoSpeakResponses) {
+                                speakReply(state.fullText, fromCloud = state.modelUsed == AiModelUsed.CLOUD)
+                            }
+                        }
+                        is HybridAiState.Error -> {
+                            _isGenerating.value = false
+                            _currentStreamingText.value = null
+                            val errorMsg = ChatMessageEntity(
+                                sender = Sender.AI,
+                                text = "Error: ${state.message}",
+                                modelUsed = AiModelUsed.NONE,
+                                reasoningExplanation = "Model execution encountered an error.",
+                                associatedProjectId = currentProj?.id,
+                                sessionId = currentSessionId
+                            )
+                            chatRepository.insertMessage(errorMsg)
                         }
                     }
-                    is HybridAiState.Error -> {
-                        _isGenerating.value = false
-                        _currentStreamingText.value = null
-                        val errorMsg = ChatMessageEntity(
-                            sender = Sender.AI,
-                            text = "Error: ${state.message}",
-                            modelUsed = AiModelUsed.NONE,
-                            reasoningExplanation = "Model execution encountered an error.",
-                            associatedProjectId = currentProj?.id,
-                            sessionId = currentSessionId
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Say what happened in the chat instead of leaving it waiting for a reply.
+                android.util.Log.w("AuraViewModel", "Sending a message failed", e)
+                val failedIn = sessionId
+                if (failedIn != null) {
+                    runCatching {
+                        chatRepository.insertMessage(
+                            ChatMessageEntity(
+                                sender = Sender.AI,
+                                text = "Aura couldn't finish this reply (${e.message ?: e.javaClass.simpleName}). Try sending it again.",
+                                modelUsed = AiModelUsed.NONE,
+                                reasoningExplanation = "Something went wrong inside Aura while handling this message.",
+                                associatedProjectId = currentProj?.id,
+                                sessionId = failedIn
+                            )
                         )
-                        chatRepository.insertMessage(errorMsg)
                     }
+                }
+            } finally {
+                // Whatever happened (finished, failed or cancelled), the chat must accept messages again.
+                // (If the chat was cleared or deleted meanwhile, [cancelSend] already did this.)
+                if (sendJob === thisJob) {
+                    sendJob = null
+                    _isGenerating.value = false
+                    _currentStreamingText.value = null
+                    _streamingModelUsed.value = null
                 }
             }
         }
+        sendJob = job
+        job.start()
+    }
+
+    /** The reply being produced, if any. */
+    private var sendJob: kotlinx.coroutines.Job? = null
+
+    /** Stops the reply in progress (its chat was cleared or deleted) so it isn't saved afterwards. */
+    private fun cancelSend() {
+        sendJob?.cancel()
+        sendJob = null
+        _isGenerating.value = false
+        _currentStreamingText.value = null
+        _streamingModelUsed.value = null
     }
 
     /**
@@ -832,7 +897,19 @@ class AuraViewModel @JvmOverloads constructor(
             if (_activeProject.value?.id == project.id) {
                 _activeProject.value = null
             }
+            if (_activeSession.value?.associatedProjectId == project.id) cancelSend()
             projectRepository.deleteProject(project)
+            // Its chats go with it: they can quote the project's notes (audit 03, A3-09).
+            db.chatMessageDao().deleteForProjectChats(project.id)
+            db.chatSessionDao().deleteForProject(project.id)
+            val open = _activeSession.value
+            if (open != null && chatRepository.getSessionById(open.id) == null) {
+                val next = chatRepository.getAllSessions().first().firstOrNull()
+                    ?: chatRepository.getSessionById(chatRepository.createNewSession("New Conversation"))
+                _activeSession.value = next
+                _activeProject.value = next?.associatedProjectId?.let { projectRepository.getProjectById(it) }
+                loadChatMessages()
+            }
             // Its to-dos stay, just without a project.
             todoDao.clearProject(project.id)
             // A later project could reuse the ID; it must not inherit sharing.
@@ -919,6 +996,7 @@ class AuraViewModel @JvmOverloads constructor(
     }
 
     suspend fun clearCurrentChatDirect() {
+        cancelSend()
         val sess = _activeSession.value
         val proj = _activeProject.value
         if (sess != null) {

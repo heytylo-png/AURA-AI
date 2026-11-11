@@ -494,7 +494,7 @@ fun SettingsScreen(
                             Text("Read replies with ElevenLabs voice", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "Sends the reply text (up to 1,500 characters) to ElevenLabs through Aura's relay to read it in your voice. Uses ElevenLabs credits. When off, offline or out of credits, the phone's voice reads it instead.",
+                                text = "Sends Claude's reply text (up to 1,500 characters) to ElevenLabs through Aura's relay to read it in your voice. Uses ElevenLabs credits. Replies answered on this phone are never sent: the phone's voice reads those, and anything else when this is off, offline or out of credits.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

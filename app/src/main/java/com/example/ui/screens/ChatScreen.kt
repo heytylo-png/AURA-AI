@@ -326,7 +326,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
                             onApproveAction = { viewModel.approveAction(it) },
                             onDismissAction = { viewModel.dismissAction(it) },
                             onSpeakText = { text ->
-                                viewModel.speakReply(text)
+                                viewModel.speakReply(text, fromCloud = message.modelUsed == com.example.data.model.AiModelUsed.CLOUD)
                             },
                             aiName = identity.name,
                             projects = projectsForCards,
