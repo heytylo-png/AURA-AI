@@ -3,7 +3,8 @@
 // POST /v1/chat   Authorization: Bearer <Firebase ID token>
 //   body: { "system": "...", "messages": [{ "role": "user" | "assistant", "content": "..." }] }
 //   response: Anthropic Messages API server-sent events, passed through unchanged.
-// GET  /health    no auth; reports whether the relay is configured (never reveals secrets).
+// POST /v1/speak  same sign-in; body: { "text": "..." }; response: MP3 audio from ElevenLabs.
+// GET  /health    no auth; reports only whether chat and speech are configured.
 //
 // Only Firebase users listed in ALLOWED_UIDS may call /v1/chat. The model, output limit and
 // request size are fixed here, so a stolen token cannot pick an expensive model or huge outputs.
@@ -147,11 +148,18 @@ function decodeJsonPart(part) {
   return JSON.parse(new TextDecoder().decode(base64UrlToBytes(part)));
 }
 
+// A token naming a key we don't have may mean Google rotated its keys early, so the keys are
+// fetched again, but at most this often. Without the pause, anyone could make the relay download
+// the keys on every request just by sending made-up key IDs (audit 03, A3-04).
+export const UNKNOWN_KEY_REFETCH_MS = 5 * 60 * 1000;
+
 /** Caches Google's signing keys for Firebase ID tokens, honouring Cache-Control max-age. */
 export function createKeyStore(fetchImpl, now) {
-  let cache = { keys: null, expiresAt: 0 };
+  let cache = { keys: null, expiresAt: 0, fetchedAt: 0 };
   return async function getKey(kid) {
-    if (!cache.keys || now() >= cache.expiresAt || !cache.keys.has(kid)) {
+    const stale = !cache.keys || now() >= cache.expiresAt;
+    const unknownKeyRetry = !stale && !cache.keys.has(kid) && now() - cache.fetchedAt >= UNKNOWN_KEY_REFETCH_MS;
+    if (stale || unknownKeyRetry) {
       const res = await fetchImpl(JWKS_URL);
       if (!res.ok) throw new RelayError(503, "auth_unavailable", "Could not fetch sign-in verification keys.");
       const maxAge = Number(/max-age=(\d+)/.exec(res.headers.get("cache-control") || "")?.[1] || 3600);
@@ -167,7 +175,7 @@ export function createKeyStore(fetchImpl, now) {
         );
         keys.set(jwk.kid, key);
       }
-      cache = { keys, expiresAt: now() + Math.min(maxAge, 86400) * 1000 };
+      cache = { keys, expiresAt: now() + Math.min(maxAge, 86400) * 1000, fetchedAt: now() };
     }
     return cache.keys.get(kid) || null;
   };
@@ -242,11 +250,10 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
     const configured = Boolean(env.ANTHROPIC_API_KEY && env.FIREBASE_PROJECT_ID);
 
     if (request.method === "GET" && url.pathname === "/health") {
+      // Public, so it says only whether chat and speech are set up: not the model or how many users.
       return json(200, {
         ok: configured,
-        model: env.ANTHROPIC_MODEL || DEFAULT_MODEL,
         speech: Boolean(env.ELEVENLABS_API_KEY && env.ELEVENLABS_API_KEY !== "not-set" && env.ELEVENLABS_VOICE_ID),
-        allowedUsers: (env.ALLOWED_UIDS || "").split(",").filter((s) => s.trim()).length,
       });
     }
     if (url.pathname !== "/v1/chat" && url.pathname !== "/v1/speak") {

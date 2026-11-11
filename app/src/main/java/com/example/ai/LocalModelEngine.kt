@@ -155,6 +155,10 @@ class LocalModelEngine {
     private fun isMemorySaveIntent(prompt: String): Boolean {
         return prompt.startsWith("remember that") ||
                 prompt.startsWith("remember this") ||
+                // Auto mode keeps these on the phone (HybridAiEngine.LOCAL_COMMANDS), so they must work here.
+                prompt.startsWith("remember:") ||
+                prompt.startsWith("remember i ") ||
+                prompt.startsWith("remember my ") ||
                 prompt.startsWith("keep in mind that") ||
                 prompt.contains("my favorite") ||
                 prompt.contains("i prefer") ||
@@ -207,6 +211,8 @@ class LocalModelEngine {
         val prefixes = listOf(
             "remember that ",
             "remember this: ",
+            "remember: ",
+            "remember:",
             "keep in mind that ",
             "note that ",
             "please remember "
@@ -217,6 +223,11 @@ class LocalModelEngine {
                 result = result.substring(p.length).trim()
                 break
             }
+        }
+        // "Remember my birthday is in May" / "Remember I take the 8:15 train": keep "my…" / "I…".
+        val lowerResult = result.lowercase(Locale.ROOT)
+        if (lowerResult.startsWith("remember my ") || lowerResult.startsWith("remember i ")) {
+            result = result.substring("remember ".length).trim()
         }
         return result.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
     }

@@ -1,7 +1,7 @@
 // Run with: node --test relay/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES } from "../src/index.js";
+import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS } from "../src/index.js";
 
 const PROJECT = "aura-test-project";
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -167,7 +167,7 @@ test("health reports configuration without secrets", async () => {
   const { handle, env } = setup();
   const res = await handle(new Request("https://relay.example/health"), env);
   const body = await res.json();
-  assert.deepEqual(body, { ok: true, model: "claude-sonnet-5-5", speech: false, allowedUsers: 2 });
+  assert.deepEqual(body, { ok: true, speech: false });
   assert.ok(!JSON.stringify(body).includes("sk-test"));
 });
 
@@ -321,4 +321,25 @@ test("rate limit: unauthenticated calls don't count, and a missing or broken lim
   const broken = { limit: async () => { throw new Error("binding down"); } };
   assert.equal((await post(handle, { ...env, CHAT_LIMITER: broken }, { token: await makeToken() })).status, 200);
   assert.equal((await post(handle, env, { token: await makeToken() })).status, 200);
+});
+
+test("made-up key IDs don't make the relay download Google's keys on every request", async () => {
+  let fetches = 0;
+  let time = NOW;
+  const fetchImpl = async () => {
+    fetches++;
+    return new Response(JSON.stringify({ keys: [publicJwk] }), { headers: { "cache-control": "public, max-age=3600" } });
+  };
+  const getKey = createKeyStore(fetchImpl, () => time);
+  assert.ok(await getKey("k1"));
+  for (let i = 0; i < 20; i++) assert.equal(await getKey(`made-up-${i}`), null);
+  assert.equal(fetches, 1);
+  // After the pause an unknown key is looked up once more (Google may have rotated its keys).
+  time += UNKNOWN_KEY_REFETCH_MS;
+  assert.equal(await getKey("made-up-again"), null);
+  assert.equal(await getKey("made-up-once-more"), null);
+  assert.equal(fetches, 2);
+  // Known keys never cause a download while the cache is fresh.
+  assert.ok(await getKey("k1"));
+  assert.equal(fetches, 2);
 });

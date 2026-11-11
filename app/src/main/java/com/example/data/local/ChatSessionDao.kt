@@ -33,6 +33,9 @@ interface ChatSessionDao {
     @Query("DELETE FROM chat_sessions WHERE id = :sessionId")
     suspend fun deleteSession(sessionId: Long)
 
+    @Query("DELETE FROM chat_sessions WHERE associatedProjectId = :projectId")
+    suspend fun deleteForProject(projectId: Long)
+
     @Query("SELECT COUNT(*) FROM chat_sessions")
     suspend fun getSessionCount(): Int
 
