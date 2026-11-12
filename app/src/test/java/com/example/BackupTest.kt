@@ -65,6 +65,89 @@ class BackupTest {
         expectFailure("damaged") { BackupCrypto.unzip(BackupCrypto.zip(mapOf("../evil" to byteArrayOf(1)))) }
     }
 
+    private fun expectAnyFailure(what: String, block: () -> Unit) {
+        try { block(); fail("expected a failure: $what") } catch (e: BackupCrypto.BackupException) { /* refused, as it should be */ }
+    }
+
+    private fun bytes(n: Int) = ByteArray(n) { (it * 31 + 7).toByte() }
+
+    @Test fun backupsAreWrittenInPiecesAndRoundTripAtEverySize() {
+        val chunk = 1024
+        // Incompressible-ish data around the piece boundaries, and one spanning many pieces.
+        for (size in listOf(0, 1, chunk - 1, chunk, chunk + 1, 3 * chunk, 50_000)) {
+            val data = java.util.Random(size.toLong()).let { r -> ByteArray(size).also(r::nextBytes) }
+            val file = BackupCrypto.encrypt(mapOf("database.sqlite" to data, "settings.json" to "{}".toByteArray()), pass, 7, iterations = fast, chunkSize = chunk)
+            val header = BackupCrypto.readHeader(file)
+            assertEquals(2, header.format)
+            assertEquals(chunk, header.chunkSize)
+            val (_, out) = BackupCrypto.decrypt(file, pass)
+            assertArrayEquals("size $size", data, out["database.sqlite"])
+            assertArrayEquals("{}".toByteArray(), out["settings.json"])
+        }
+    }
+
+    @Test fun piecesCannotBeCutOffDroppedSwappedOrRepeated() {
+        val chunk = 1024
+        val sealed = chunk + 16
+        val data = java.util.Random(1).let { r -> ByteArray(10 * chunk).also(r::nextBytes) }
+        val file = BackupCrypto.encrypt(mapOf("a.bin" to data), pass, 7, iterations = fast, chunkSize = chunk)
+        val start = 8 + 4 + java.nio.ByteBuffer.wrap(file, 8, 4).int
+        assertTrue("several pieces", (file.size - start) > 5 * sealed)
+        fun piece(i: Int) = file.copyOfRange(start + i * sealed, minOf(file.size, start + (i + 1) * sealed))
+        val head = file.copyOfRange(0, start)
+        val pieces = (0 until (file.size - start + sealed - 1) / sealed).map(::piece)
+        fun build(list: List<ByteArray>) = list.fold(head) { acc, p -> acc + p }
+
+        assertArrayEquals(file, build(pieces))
+        expectAnyFailure("cut off after a whole piece") { BackupCrypto.decrypt(build(pieces.dropLast(1)), pass) }
+        expectAnyFailure("cut off after two pieces") { BackupCrypto.decrypt(build(pieces.take(2)), pass) }
+        expectAnyFailure("cut off mid-piece") { BackupCrypto.decrypt(file.copyOf(file.size - 5), pass) }
+        expectAnyFailure("header only") { BackupCrypto.decrypt(head, pass) }
+        expectAnyFailure("a piece dropped") { BackupCrypto.decrypt(build(pieces.filterIndexed { i, _ -> i != 2 }), pass) }
+        expectAnyFailure("two pieces swapped") { BackupCrypto.decrypt(build(pieces.toMutableList().also { val t = it[1]; it[1] = it[2]; it[2] = t }), pass) }
+        expectAnyFailure("a piece repeated") { BackupCrypto.decrypt(build(pieces.take(3) + pieces.drop(2)), pass) }
+        expectAnyFailure("extra data added") { BackupCrypto.decrypt(file + ByteArray(40), pass) }
+        // A change in the middle of a large file is caught too.
+        val flipped = file.copyOf().also { it[start + 4 * sealed + 100] = (it[start + 4 * sealed + 100].toInt() xor 1).toByte() }
+        expectFailure("Wrong passphrase") { BackupCrypto.decrypt(flipped, pass) }
+    }
+
+    @Test fun backupsMadeBeforeTheNewFormatStillOpen() {
+        val entries = mapOf("database.sqlite" to bytes(5000), "settings.json" to "{}".toByteArray())
+        val old = BackupCrypto.encryptFormat1(entries, pass, 7, now = 42, iterations = fast)
+        assertEquals(1, BackupCrypto.readHeader(old).format)
+        val (header, out) = BackupCrypto.decrypt(old, pass)
+        assertEquals(42L, header.createdAt)
+        assertArrayEquals(bytes(5000), out["database.sqlite"])
+        expectFailure("Wrong passphrase") { BackupCrypto.decrypt(old, "wrong passphrase".toCharArray()) }
+        val flipped = old.copyOf().also { it[it.size - 1] = (it[it.size - 1].toInt() xor 1).toByte() }
+        expectFailure("Wrong passphrase") { BackupCrypto.decrypt(flipped, pass) }
+    }
+
+    @Test fun cancellingARestoreRemovesTheUnlockedCopy() = runBlocking {
+        val db = AppDatabase.getInstance(app)
+        db.todoDao().insert(TodoEntity(title = "Pay rent"))
+        val manager = BackupManager(app)
+        val backup = manager.createBackup(pass)
+        fun unlocked() = app.cacheDir.listFiles { f -> f.name.startsWith("aura_restore_check") }!!.size
+
+        val (_, staged) = manager.inspect(backup, pass)
+        assertEquals(1, unlocked())
+        staged.discard()
+        assertEquals(0, unlocked())
+
+        // A wrong passphrase or a damaged file leaves nothing behind either.
+        expectFailure("Wrong passphrase") { manager.inspect(backup, "wrong passphrase".toCharArray()) }
+        expectAnyFailure("cut-off file") { manager.inspect(backup.copyOf(backup.size / 2), pass) }
+        assertEquals(0, unlocked())
+
+        // Left over from a closed app: cleared on the next start.
+        manager.inspect(backup, pass)
+        assertEquals(1, unlocked())
+        BackupManager.clearUnlockedCopies(app)
+        assertEquals(0, unlocked())
+    }
+
     @Test fun saveThenRestoreReplacesDataAndSettings() = runBlocking {
         val db = AppDatabase.getInstance(app)
         db.memoryDao().insertMemory(MemoryEntity(content = "Likes green tea", category = MemoryCategory.values().first()))

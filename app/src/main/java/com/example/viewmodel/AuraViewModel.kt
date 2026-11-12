@@ -249,17 +249,18 @@ class AuraViewModel @JvmOverloads constructor(
     private val _backupState = MutableStateFlow<BackupUiState>(BackupUiState.Idle)
     val backupState: StateFlow<BackupUiState> = _backupState.asStateFlow()
     private val backupManager by lazy { com.example.backup.BackupManager(getApplication()) }
-    private var pendingRestore: Map<String, ByteArray>? = null
+    private var pendingRestore: com.example.backup.BackupManager.Staged? = null
 
     fun dismissBackupMessage() {
+        // Cancelling a restore removes the unlocked copy of the backup.
+        pendingRestore?.discard()
         pendingRestore = null
         _backupState.value = BackupUiState.Idle
     }
 
     private fun backupError(e: Throwable): String = when (e) {
         is com.example.backup.BackupCrypto.BackupException -> e.message ?: "Something went wrong."
-        // Backups are built in memory; a very large library can be too big for this phone.
-        is OutOfMemoryError -> "There is too much data for this phone to handle in one backup. Deleting large project notes or old chats makes it smaller."
+        is OutOfMemoryError -> "This phone ran out of memory. Close other apps and try again."
         else -> "Something went wrong (${e.message ?: e.javaClass.simpleName})."
     }
 
@@ -281,8 +282,9 @@ class AuraViewModel @JvmOverloads constructor(
         _backupState.value = BackupUiState.Working("Unlocking the backup\u2026")
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             _backupState.value = try {
-                val (summary, entries) = backupManager.inspect(backupManager.readFile(uri), passphrase)
-                pendingRestore = entries
+                pendingRestore?.discard()
+                val (summary, staged) = backupManager.inspect(uri, passphrase)
+                pendingRestore = staged
                 BackupUiState.ConfirmRestore(summary)
             } catch (e: Throwable) {
                 BackupUiState.Failed("Nothing was changed. ${backupError(e)}")
