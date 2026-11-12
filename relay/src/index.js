@@ -15,6 +15,9 @@
 //   FIREBASE_PROJECT_ID var, the Firebase project the app signs in to
 //   ANTHROPIC_MODEL     var, default claude-sonnet-5-5
 //   MAX_OUTPUT_TOKENS   var, default 2048
+//   DAILY_CHAT_LIMIT    var, default 300: chat requests per user per day (needs the USAGE binding)
+//   DAILY_SPEAK_LIMIT   var, default 150: speech requests per user per day (needs the USAGE binding)
+//   USAGE               optional KV namespace that holds the daily counts
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
@@ -112,6 +115,33 @@ export async function withinLimit(limiter, uid) {
   try {
     const { success } = await limiter.limit({ key: uid });
     return success !== false;
+  } catch {
+    return true;
+  }
+}
+
+export const DEFAULT_DAILY_CHAT_LIMIT = 300;
+export const DEFAULT_DAILY_SPEAK_LIMIT = 150;
+
+/**
+ * Per-user daily cap, counted in the USAGE key-value store under "<kind>:<user>:<UTC date>".
+ * The per-minute limits alone still allow about 21,600 requests a day; this stops a stolen token
+ * or a runaway loop long before that. Returns false once the day's count has reached [limit].
+ *
+ * Like the per-minute limits it fails open: without the binding, or if the store errors, the
+ * request is allowed, because the Anthropic/ElevenLabs spend limits are the hard backstop. The
+ * store is eventually consistent, so a burst of simultaneous requests can overshoot by a few.
+ */
+export async function withinDailyLimit(store, kind, uid, limit, nowMs) {
+  if (!store || typeof store.get !== "function" || typeof store.put !== "function") return true;
+  if (!Number.isFinite(limit) || limit <= 0) return true;
+  const key = `${kind}:${uid}:${new Date(nowMs).toISOString().slice(0, 10)}`;
+  try {
+    const used = Number(await store.get(key)) || 0;
+    if (used >= limit) return false;
+    // Kept for two days, then the store removes it by itself.
+    await store.put(key, String(used + 1), { expirationTtl: 2 * 86400 });
+    return true;
   } catch {
     return true;
   }
@@ -274,16 +304,19 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
       return uid;
     }
 
-    async function checkLimit(limiter, uid) {
+    async function checkLimit(limiter, uid, kind, dailyLimit) {
       if (!(await withinLimit(limiter, uid))) {
         throw new RelayError(429, "rate_limited", "Too many requests in the last minute. Wait a moment and try again.");
+      }
+      if (!(await withinDailyLimit(env.USAGE, kind, uid, dailyLimit, now()))) {
+        throw new RelayError(429, "daily_limit", `Today's limit of ${dailyLimit} ${kind} requests is used up. It resets at midnight UTC.`);
       }
     }
 
     if (url.pathname === "/v1/speak") {
       try {
         const uid = await authorize();
-        await checkLimit(env.SPEAK_LIMITER, uid);
+        await checkLimit(env.SPEAK_LIMITER, uid, "speech", Number(env.DAILY_SPEAK_LIMIT) || DEFAULT_DAILY_SPEAK_LIMIT);
         const key = env.ELEVENLABS_API_KEY;
         if (!key || key === "not-set" || !env.ELEVENLABS_VOICE_ID) {
           throw new RelayError(503, "tts_not_configured", "The relay has no ElevenLabs key or voice yet.");
@@ -331,7 +364,7 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
     try {
       if (!configured) throw new RelayError(503, "relay_not_configured", "The relay is missing its Anthropic key or Firebase project setting.");
       const uid = await authorize();
-      await checkLimit(env.CHAT_LIMITER, uid);
+      await checkLimit(env.CHAT_LIMITER, uid, "chat", Number(env.DAILY_CHAT_LIMIT) || DEFAULT_DAILY_CHAT_LIMIT);
 
       let body;
       try {

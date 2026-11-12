@@ -1,7 +1,7 @@
 // Run with: node --test relay/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS } from "../src/index.js";
+import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit } from "../src/index.js";
 
 const PROJECT = "aura-test-project";
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -342,4 +342,72 @@ test("made-up key IDs don't make the relay download Google's keys on every reque
   // Known keys never cause a download while the cache is fresh.
   assert.ok(await getKey("k1"));
   assert.equal(fetches, 2);
+});
+
+function fakeStore() {
+  const data = new Map();
+  return {
+    data,
+    puts: [],
+    async get(key) { return data.has(key) ? data.get(key) : null; },
+    async put(key, value, options) { data.set(key, value); this.puts.push({ key, value, options }); },
+  };
+}
+
+test("daily limit: counts per user, per kind and per UTC day", async () => {
+  const store = fakeStore();
+  const day1 = Date.UTC(2026, 10, 5, 23, 59, 0);
+  assert.equal(await withinDailyLimit(store, "chat", "u1", 2, day1), true);
+  assert.equal(await withinDailyLimit(store, "chat", "u1", 2, day1), true);
+  assert.equal(await withinDailyLimit(store, "chat", "u1", 2, day1), false);
+  // Another user, another kind and the next day each have their own count.
+  assert.equal(await withinDailyLimit(store, "chat", "u2", 2, day1), true);
+  assert.equal(await withinDailyLimit(store, "speech", "u1", 2, day1), true);
+  assert.equal(await withinDailyLimit(store, "chat", "u1", 2, day1 + 2 * 60 * 1000), true);
+  assert.equal(store.data.get("chat:u1:2026-11-05"), "2");
+  assert.equal(store.data.get("chat:u1:2026-11-06"), "1");
+  assert.ok(store.puts.every((p) => p.options.expirationTtl === 2 * 86400));
+});
+
+test("daily limit: allowed when there is no store or the store fails", async () => {
+  assert.equal(await withinDailyLimit(undefined, "chat", "u1", 1, NOW), true);
+  const broken = { get: async () => { throw new Error("down"); }, put: async () => {} };
+  assert.equal(await withinDailyLimit(broken, "chat", "u1", 1, NOW), true);
+});
+
+test("over the daily limit: 429 daily_limit and nothing reaches Claude or ElevenLabs", async () => {
+  const { handle, env, calls } = setup();
+  env.USAGE = fakeStore();
+  env.DAILY_CHAT_LIMIT = "1";
+  env.DAILY_SPEAK_LIMIT = "1";
+  const token = await makeToken();
+  const chat = () => handle(new Request("https://relay.example/v1/chat", {
+    method: "POST", headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
+  }), env);
+  const speak = () => handle(new Request("https://relay.example/v1/speak", {
+    method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ text: "hi" }),
+  }), { ...env, ELEVENLABS_API_KEY: "el-key", ELEVENLABS_VOICE_ID: "voice" });
+
+  assert.equal((await chat()).status, 200);
+  const blocked = await chat();
+  assert.equal(blocked.status, 429);
+  assert.equal((await blocked.json()).error.type, "daily_limit");
+  assert.equal(calls.filter((c) => c.url.includes("anthropic.com")).length, 1);
+
+  assert.equal((await speak()).status, 200);
+  assert.equal((await speak()).status, 429);
+  assert.equal(calls.filter((c) => c.url.includes("elevenlabs.io")).length, 1);
+});
+
+test("a stranger's requests don't use up anyone's daily count", async () => {
+  const { handle, env } = setup();
+  env.USAGE = fakeStore();
+  const token = await makeToken({ sub: "stranger" });
+  const res = await handle(new Request("https://relay.example/v1/chat", {
+    method: "POST", headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
+  }), env);
+  assert.equal(res.status, 403);
+  assert.equal(env.USAGE.data.size, 0);
 });
