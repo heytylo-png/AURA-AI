@@ -54,6 +54,7 @@ import com.example.data.model.UserSettingsEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 
 class AuraViewModel @JvmOverloads constructor(
@@ -601,6 +602,11 @@ class AuraViewModel @JvmOverloads constructor(
                     projectSession = chatRepository.getSessionById(newId)
                 }
                 _activeSession.value = projectSession
+            } else if (_activeSession.value?.associatedProjectId != null) {
+                // Leaving a project also leaves its chat, so the chat on screen never belongs to a
+                // project the header no longer shows. Goes to the latest general chat, or a new one.
+                _activeSession.value = chatRepository.getAllSessions().firstOrNull()?.firstOrNull { it.associatedProjectId == null }
+                    ?: chatRepository.getSessionById(chatRepository.createNewSession("New Conversation"))
             }
             loadChatMessages()
         }
@@ -904,7 +910,7 @@ class AuraViewModel @JvmOverloads constructor(
             db.chatSessionDao().deleteForProject(project.id)
             val open = _activeSession.value
             if (open != null && chatRepository.getSessionById(open.id) == null) {
-                val next = chatRepository.getAllSessions().first().firstOrNull()
+                val next = chatRepository.getAllSessions().firstOrNull()?.firstOrNull()
                     ?: chatRepository.getSessionById(chatRepository.createNewSession("New Conversation"))
                 _activeSession.value = next
                 _activeProject.value = next?.associatedProjectId?.let { projectRepository.getProjectById(it) }
