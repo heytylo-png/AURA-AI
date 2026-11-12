@@ -182,6 +182,18 @@ fun ProjectsScreen(
     }
 }
 
+/** What deleting a project removes, said before it happens (it can't be undone). */
+internal fun deleteProjectWarning(milestones: Int, notes: Int): String {
+    fun count(n: Int, word: String) = "$n $word${if (n == 1) "" else "s"}"
+    val contents = listOfNotNull(
+        count(milestones, "milestone").takeIf { milestones > 0 },
+        count(notes, "note").takeIf { notes > 0 },
+        "its chat with Aura"
+    )
+    return "This permanently deletes the project, ${contents.joinToString(", ")}. It can't be undone. " +
+        "Its to-dos are kept, without a project."
+}
+
 @Composable
 fun ProjectCard(
     project: ProjectEntity,
@@ -196,8 +208,25 @@ fun ProjectCard(
 
     var showAddMilestoneDialog by remember { mutableStateOf(false) }
     var showAddTodoDialog by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     val allTodos by viewModel.visibleTodos.collectAsState()
     val allProjects by viewModel.allProjects.collectAsState()
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete \"${project.title}\"?") },
+            text = { Text(deleteProjectWarning(milestones.size, artifacts.size)) },
+            confirmButton = {
+                TextButton(
+                    onClick = { confirmDelete = false; onDelete() },
+                    modifier = Modifier.testTag("project_delete_confirm")
+                ) { Text("Delete project", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Keep") } },
+            modifier = Modifier.testTag("project_delete_dialog")
+        )
+    }
     val projectTodos = remember(allTodos, project.id) {
         allTodos.filter { it.projectId == project.id && !it.done }.sortedWith(com.example.data.model.TodoRules.openOrder)
     }
@@ -271,7 +300,10 @@ fun ProjectCard(
 
                     Spacer(Modifier.width(4.dp))
 
-                    IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                    IconButton(
+                        onClick = { confirmDelete = true },
+                        modifier = Modifier.size(28.dp).testTag("project_delete_button")
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Delete,
                             contentDescription = "Delete Project",

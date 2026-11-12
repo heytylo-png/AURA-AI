@@ -9,7 +9,11 @@ import com.example.data.local.AppDatabase
 import com.example.data.local.DATABASE_VERSION
 import org.json.JSONArray
 import org.json.JSONObject
+import android.provider.DocumentsContract
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 
 /**
  * Makes and restores encrypted backups of everything Aura keeps on the phone: the database
@@ -26,40 +30,71 @@ class BackupManager(private val context: Context) {
 
     private val app = context.applicationContext
 
-    /** Encrypted backup bytes for the current data. */
-    fun createBackup(passphrase: CharArray): ByteArray {
+    /** A backup that was unlocked and checked, waiting for the user to confirm the restore. */
+    class Staged(val database: File, val settings: String?) {
+        /** Removes the unlocked copy (the user cancelled, or the restore is done). */
+        fun discard() {
+            database.delete()
+            removeSqliteSideFiles(database)
+        }
+    }
+
+    /**
+     * Writes an encrypted backup of the current data to [out], piece by piece: neither the
+     * database nor the backup is ever held in memory, so the size of the library doesn't matter.
+     */
+    fun writeBackup(out: OutputStream, passphrase: CharArray) {
         val snapshot = snapshotDatabase()
         try {
-            val entries = linkedMapOf(DB_ENTRY to snapshot.readBytes(), PREFS_ENTRY to exportPrefs().toByteArray(Charsets.UTF_8))
-            return BackupCrypto.encrypt(entries, passphrase, DATABASE_VERSION)
+            BackupCrypto.encryptTo(out, passphrase, DATABASE_VERSION) { zip ->
+                snapshot.inputStream().use { BackupCrypto.putEntry(zip, DB_ENTRY, it) }
+                BackupCrypto.putEntry(zip, PREFS_ENTRY, exportPrefs().toByteArray(Charsets.UTF_8).inputStream())
+            }
         } finally {
             snapshot.delete()
         }
     }
 
-    fun writeBackup(uri: Uri, passphrase: CharArray) {
-        val bytes = createBackup(passphrase)
-        val out = app.contentResolver.openOutputStream(uri, "wt") ?: throw BackupCrypto.BackupException("Couldn't open the file to save to.")
-        out.use { it.write(bytes) }
-    }
+    /** Encrypted backup bytes for the current data (tests; the app writes straight to the file). */
+    fun createBackup(passphrase: CharArray): ByteArray =
+        ByteArrayOutputStream().also { writeBackup(it, passphrase) }.toByteArray()
 
-    fun readFile(uri: Uri): ByteArray {
-        val input = app.contentResolver.openInputStream(uri) ?: throw BackupCrypto.BackupException("Couldn't open that file.")
-        return input.use {
-            val bytes = it.readBytes()
-            if (bytes.size > BackupCrypto.MAX_FILE_BYTES) throw BackupCrypto.BackupException("This file is too large to be an Aura backup.")
-            bytes
+    fun writeBackup(uri: Uri, passphrase: CharArray) {
+        val out = app.contentResolver.openOutputStream(uri, "wt") ?: throw BackupCrypto.BackupException("Couldn't open the file to save to.")
+        try {
+            out.use { writeBackup(it, passphrase) }
+        } catch (e: Throwable) {
+            // Don't leave half a backup behind looking like a real one.
+            runCatching { DocumentsContract.deleteDocument(app.contentResolver, uri) }
+            throw e
         }
     }
 
-    /** Decrypts and checks a backup without changing anything; returns what it contains. */
-    fun inspect(file: ByteArray, passphrase: CharArray): Pair<Summary, Map<String, ByteArray>> {
-        val (header, entries) = BackupCrypto.decrypt(file, passphrase)
-        val db = entries[DB_ENTRY] ?: throw BackupCrypto.BackupException("This backup has no data in it.")
-        if (header.dbVersion > DATABASE_VERSION) throw BackupCrypto.BackupException("This backup was made by a newer version of Aura. Update Aura first.")
-        val temp = File.createTempFile("aura_restore_check", ".db", app.cacheDir)
+    fun inspect(uri: Uri, passphrase: CharArray): Pair<Summary, Staged> {
+        val input = app.contentResolver.openInputStream(uri) ?: throw BackupCrypto.BackupException("Couldn't open that file.")
+        return input.use { inspect(it, passphrase) }
+    }
+
+    fun inspect(file: ByteArray, passphrase: CharArray): Pair<Summary, Staged> = inspect(file.inputStream(), passphrase)
+
+    /**
+     * Decrypts and checks a backup without changing anything; returns what it contains. The
+     * unlocked database is kept in Aura's private cache until [restore] or [Staged.discard].
+     */
+    fun inspect(input: InputStream, passphrase: CharArray): Pair<Summary, Staged> {
+        clearUnlockedCopies(app)
+        val temp = File.createTempFile(UNLOCKED_PREFIX, ".db", app.cacheDir)
+        var hasDatabase = false
+        var settings: String? = null
         try {
-            temp.writeBytes(db)
+            val header = BackupCrypto.decryptTo(input, passphrase) { name, data ->
+                when (name) {
+                    DB_ENTRY -> { temp.outputStream().use { data.copyTo(it) }; hasDatabase = true }
+                    PREFS_ENTRY -> settings = String(readSmall(data), Charsets.UTF_8)
+                }
+            }
+            if (!hasDatabase) throw BackupCrypto.BackupException("This backup has no data in it.")
+            if (header.dbVersion > DATABASE_VERSION) throw BackupCrypto.BackupException("This backup was made by a newer version of Aura. Update Aura first.")
             val summary = SQLiteDatabase.openDatabase(temp.path, null, SQLiteDatabase.OPEN_READONLY).use { sql ->
                 val ok = sql.rawQuery("PRAGMA integrity_check", null).use { c -> c.moveToFirst() && c.getString(0) == "ok" }
                 if (!ok) throw BackupCrypto.BackupException("The data inside this backup is damaged.")
@@ -73,29 +108,50 @@ class BackupManager(private val context: Context) {
                 if (!hasTable(sql, "memories")) throw BackupCrypto.BackupException("This backup doesn't contain Aura data.")
                 Summary(header.createdAt, version, count("memories"), count("chat_sessions"), count("todos"), count("projects"))
             }
-            return summary to entries
-        } finally {
+            // Opening the copy to check it can leave SQLite's helper files next to it.
+            removeSqliteSideFiles(temp)
+            return summary to Staged(temp, settings)
+        } catch (e: Throwable) {
             temp.delete()
-            File(temp.path + "-journal").delete()
+            removeSqliteSideFiles(temp)
+            throw if (e is android.database.sqlite.SQLiteException) BackupCrypto.BackupException("The data inside this backup is damaged.", e) else e
         }
+    }
+
+    private fun readSmall(data: InputStream): ByteArray {
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        while (true) {
+            val n = data.read(buffer)
+            if (n < 0) break
+            out.write(buffer, 0, n)
+            if (out.size() > MAX_SETTINGS_BYTES) throw BackupCrypto.BackupException("This backup file is damaged.")
+        }
+        return out.toByteArray()
     }
 
     /**
      * Replaces this phone's data with the backup. The database is closed during the swap, so the
      * caller must restart the app afterwards ([restartApp]).
      */
-    fun restore(entries: Map<String, ByteArray>) {
-        val db = entries[DB_ENTRY] ?: throw BackupCrypto.BackupException("This backup has no data in it.")
+    fun restore(backup: Staged) {
+        if (!backup.database.exists()) throw BackupCrypto.BackupException("This backup has no data in it.")
         val live = app.getDatabasePath(AppDatabase.DATABASE_NAME)
         val staged = File(live.path + STAGED)
         val previous = File(live.path + PREVIOUS)
         live.parentFile?.mkdirs()
-        staged.writeBytes(db)
+        staged.delete()
+        // Usually a rename within Aura's storage; copy if the cache is on another volume.
+        if (!backup.database.renameTo(staged)) backup.database.copyTo(staged, overwrite = true)
+        backup.discard()
 
         AppDatabase.closeDatabase()
         // Keep the current data as a safety copy for a while (see [removeOldSafetyCopy]).
         previous.delete(); File(previous.path + "-wal").delete(); File(previous.path + "-shm").delete()
-        if (live.exists() && !live.renameTo(previous)) throw BackupCrypto.BackupException("Couldn't set the current data aside; nothing was changed.")
+        if (live.exists() && !live.renameTo(previous)) {
+            staged.delete()
+            throw BackupCrypto.BackupException("Couldn't set the current data aside; nothing was changed.")
+        }
         // Renaming keeps the file's old date; stamp it with now so its age counts from this restore.
         previous.setLastModified(System.currentTimeMillis())
         File(live.path + "-wal").renameTo(File(previous.path + "-wal"))
@@ -104,9 +160,10 @@ class BackupManager(private val context: Context) {
         if (!staged.renameTo(live)) {
             previous.renameTo(live)
             File(previous.path + "-wal").renameTo(File(live.path + "-wal"))
+            staged.delete()
             throw BackupCrypto.BackupException("Couldn't put the backup in place; your data was left as it was.")
         }
-        entries[PREFS_ENTRY]?.let { importPrefs(String(it, Charsets.UTF_8)) }
+        backup.settings?.let { importPrefs(it) }
     }
 
     /** A consistent copy of the live database file. */
@@ -189,6 +246,20 @@ class BackupManager(private val context: Context) {
         private const val STAGED = ".restore"
         private const val PREVIOUS = ".before-restore"
         private const val REMINDER_PREFS = "aura_reminders"
+        private const val UNLOCKED_PREFIX = "aura_restore_check"
+        private const val MAX_SETTINGS_BYTES = 1024 * 1024
+
+        private fun removeSqliteSideFiles(database: File) {
+            for (suffix in listOf("-journal", "-wal", "-shm")) File(database.path + suffix).delete()
+        }
+
+        /**
+         * Removes unlocked (unencrypted) backup copies left in the cache, e.g. when the app was
+         * closed while the "Replace the data on this phone?" question was showing.
+         */
+        fun clearUnlockedCopies(context: Context) {
+            context.cacheDir.listFiles { f -> f.name.startsWith(UNLOCKED_PREFIX) }?.forEach { it.delete() }
+        }
         val PREFS_FILES = listOf("aura_identity_prefs", "aura_memory_prefs", "aura_privacy_prefs", REMINDER_PREFS)
 
         /** Call before the database is first opened: completes or undoes an interrupted swap. */

@@ -61,6 +61,22 @@ jobs:
           echo "project_id=$project_id" >> "$GITHUB_OUTPUT"
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
+      # Optional daily caps: attach the key-value store that holds the counts, if one was set up.
+      - name: Attach the usage store for daily limits
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          AURA_USAGE_KV_ID: ${{ secrets.AURA_USAGE_KV_ID }}
+        run: |
+          if [ -z "$AURA_USAGE_KV_ID" ]; then
+            echo "::notice title=Daily limits off::AURA_USAGE_KV_ID is not set, so only the per-minute limits apply."
+            exit 0
+          fi
+          if ! printf '%s' "$AURA_USAGE_KV_ID" | grep -Eq '^[0-9a-f]{32}$'; then
+            echo "::error title=Bad AURA_USAGE_KV_ID::It must be the 32-character ID of a Cloudflare KV namespace."
+            exit 1
+          fi
+          printf '\n[[kv_namespaces]]\nbinding = "USAGE"\nid = "%s"\n' "$AURA_USAGE_KV_ID" >> relay/wrangler.toml
+
       - name: Deploy relay to Cloudflare
         if: steps.secrets.outputs.ready == 'true'
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3

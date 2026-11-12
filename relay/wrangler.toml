@@ -11,6 +11,10 @@ MAX_OUTPUT_TOKENS = "2048"
 # ElevenLabs voice for read-aloud (the key is a secret set by the deploy workflow).
 ELEVENLABS_VOICE_ID = "wsj349S7Ee6gB32Poaf0"
 ELEVENLABS_MODEL = "eleven_flash_v2_5"
+# Per-user daily caps. They only take effect once the USAGE key-value store is attached: the deploy
+# workflow adds it when the AURA_USAGE_KV_ID repository secret is set (see relay/README.md).
+DAILY_CHAT_LIMIT = "300"
+DAILY_SPEAK_LIMIT = "150"
 
 # Per-user limits (requests per minute) so a loop or stolen token can't burn credits fast.
 # unsafe.bindings form works with the pinned wrangler 4.20. Spend limits in the Anthropic and

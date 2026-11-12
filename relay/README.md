@@ -11,6 +11,12 @@ Anthropic API key inside the (public) APK.
 
 Each allowed user may make 15 chat and 15 speech requests per minute.
 
+Optional daily cap (300 chat and 150 speech requests per user per day, set in `wrangler.toml`):
+it needs a place to keep the counts. To turn it on, create a KV namespace in the Cloudflare
+dashboard (Storage & Databases -> KV -> Create), copy its ID into a repository secret named
+`AURA_USAGE_KV_ID`, and re-run the relay deployment. Without the secret the relay works as
+before, with only the per-minute limits.
+
 The model (`claude-sonnet-5-5`) and output limit are fixed in `wrangler.toml`, so the
 app cannot request a different model or very long outputs.
 
