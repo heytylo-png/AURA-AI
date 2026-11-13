@@ -102,6 +102,16 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # Pictures of every main screen, drawn by ScreensRenderTest, to look at without installing.
+      - name: Upload screen pictures
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: aura-screens
+          path: app/build/reports/screenshots/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
