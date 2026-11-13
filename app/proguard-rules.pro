@@ -1,21 +1,20 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Rules for the shrunk build that is installed on the phone (see the debug build type).
+# Room, Firebase, OkHttp, Compose and coroutines ship their own rules; these cover the rest.
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Shrink only: remove unused code but keep every name as written. Nothing in Aura needs its names
+# hidden (the source is in this repository), and unchanged names keep crash reports readable and
+# rule out the commonest shrinker breakage (code that looks things up by name).
+-dontobfuscate
+# No rewriting of the code that is kept either (no inlining or merging of classes): the shrunk app
+# then runs the same code the unit tests ran, just with the unused parts removed.
+-dontoptimize
+-keepattributes SourceFile,LineNumberTable
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# PDF import (pdfbox-android) finds fonts, filters and encodings in ways the shrinker can't follow,
+# so it is kept whole. Its optional extras (image codecs, extra crypto) are not included in Aura.
+-keep class com.tom_roush.** { *; }
+-dontwarn com.tom_roush.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.spongycastle.**
+-dontwarn com.gemalto.jp2.**
+-dontwarn javax.xml.bind.**
