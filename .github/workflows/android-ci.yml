@@ -91,8 +91,10 @@ jobs:
           AURA_RELAY_URL: ${{ github.event_name != 'pull_request' && secrets.AURA_RELAY_URL || '' }}
         run: gradle --no-daemon :app:assembleDebug
 
+      # Also kept for manual runs, so a branch can be tried on the phone (same signing key) before
+      # it is merged. Only main builds are published to the fixed "latest" link below.
       - name: Upload Aura debug APK
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: aura-debug-apk

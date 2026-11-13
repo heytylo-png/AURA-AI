@@ -65,6 +65,11 @@ android {
       // This is the build installed on the phone, so it must not be debuggable: a debuggable app
       // lets anyone with the unlocked phone and a USB cable read Aura's data (audit 03, A3-05).
       isDebuggable = false
+      // Remove code and resources the app never uses, which makes the download much smaller.
+      // Names are kept as they are (see proguard-rules.pro), so crash reports stay readable.
+      isMinifyEnabled = true
+      isShrinkResources = true
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")
