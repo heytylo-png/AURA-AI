@@ -90,7 +90,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: relay
-          wranglerVersion: '4.20.0'
+          wranglerVersion: '4.162.0'
           secrets: |
             ANTHROPIC_API_KEY
             ALLOWED_UIDS

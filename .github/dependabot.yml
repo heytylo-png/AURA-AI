@@ -1,0 +1,29 @@
+# Opens pull requests when the pinned GitHub Actions or the app's libraries have new releases,
+# so pins don't quietly go stale. Each pull request runs the normal CI; nothing is merged or
+# released until its pull request is merged by hand.
+version: 2
+updates:
+  # The actions used by the workflows (pinned to exact commits; the tag is in the comment).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The Android app's libraries and build plugins (gradle/libs.versions.toml).
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      android-libraries:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Compose releases from 2026.08 on need Android API 37; the app builds against API 36.
+      # Remove this when the app moves to API 37.
+      - dependency-name: "androidx.compose:compose-bom"
+        versions: [">=2026.08.00"]
