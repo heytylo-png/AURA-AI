@@ -558,6 +558,10 @@ class AuraViewModel @JvmOverloads constructor(
 
     fun selectSession(session: ChatSessionEntity) {
         _activeSession.value = session
+        // Leave the previous project at once, before anything can be sent: looking up the new
+        // chat's project takes a moment, and a message sent meanwhile must not carry the old one
+        // (audit 04, A4-02).
+        if (_activeProject.value?.id != session.associatedProjectId) _activeProject.value = null
         loadChatMessages()
         // The chat decides the project: opening a project's chat makes that project active, and
         // opening any other chat leaves the project, so a shared project is only ever sent in its

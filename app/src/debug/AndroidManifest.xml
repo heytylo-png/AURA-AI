@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        The build installed on the phone is this (debug) build type, so it also contains two helper
+        screens that Compose's tooling and test libraries add. Both arrive marked as open to other
+        apps; neither needs to be, so they are closed here (audit 04, A4-04). Tests and previews
+        start them from inside Aura, which still works.
+    -->
+    <application>
+        <activity
+            android:name="androidx.compose.ui.tooling.PreviewActivity"
+            android:exported="false"
+            tools:node="merge"
+            tools:replace="android:exported" />
+        <activity
+            android:name="androidx.activity.ComponentActivity"
+            android:exported="false"
+            tools:node="merge"
+            tools:replace="android:exported" />
+    </application>
+</manifest>

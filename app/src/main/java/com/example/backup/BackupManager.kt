@@ -59,14 +59,27 @@ class BackupManager(private val context: Context) {
     fun createBackup(passphrase: CharArray): ByteArray =
         ByteArrayOutputStream().also { writeBackup(it, passphrase) }.toByteArray()
 
+    /**
+     * Saves a backup to the file the user picked. The whole backup is first written (encrypted)
+     * to Aura's private cache, and the picked file is only opened once that has succeeded: opening
+     * it empties it, so a problem while making the backup must not cost the user an older backup
+     * they chose to overwrite (audit 04, A4-01).
+     */
     fun writeBackup(uri: Uri, passphrase: CharArray) {
-        val out = app.contentResolver.openOutputStream(uri, "wt") ?: throw BackupCrypto.BackupException("Couldn't open the file to save to.")
+        clearPendingSaves(app)
+        val ready = File.createTempFile(PENDING_SAVE_PREFIX, ".aura", app.cacheDir)
         try {
-            out.use { writeBackup(it, passphrase) }
-        } catch (e: Throwable) {
-            // Don't leave half a backup behind looking like a real one.
-            runCatching { DocumentsContract.deleteDocument(app.contentResolver, uri) }
-            throw e
+            ready.outputStream().use { writeBackup(it, passphrase) }
+            val out = app.contentResolver.openOutputStream(uri, "wt") ?: throw BackupCrypto.BackupException("Couldn't open the file to save to.")
+            try {
+                out.use { target -> ready.inputStream().use { it.copyTo(target) } }
+            } catch (e: Throwable) {
+                // The picked file is now incomplete: don't leave it behind looking like a real backup.
+                runCatching { DocumentsContract.deleteDocument(app.contentResolver, uri) }
+                throw e
+            }
+        } finally {
+            ready.delete()
         }
     }
 
@@ -248,6 +261,12 @@ class BackupManager(private val context: Context) {
         private const val REMINDER_PREFS = "aura_reminders"
         private const val UNLOCKED_PREFIX = "aura_restore_check"
         private const val MAX_SETTINGS_BYTES = 1024 * 1024
+        private const val PENDING_SAVE_PREFIX = "aura_backup_ready"
+
+        /** Removes encrypted backups left in the cache by a save that was interrupted. */
+        fun clearPendingSaves(context: Context) {
+            context.cacheDir.listFiles { f -> f.name.startsWith(PENDING_SAVE_PREFIX) }?.forEach { it.delete() }
+        }
 
         private fun removeSqliteSideFiles(database: File) {
             for (suffix in listOf("-journal", "-wal", "-shm")) File(database.path + suffix).delete()

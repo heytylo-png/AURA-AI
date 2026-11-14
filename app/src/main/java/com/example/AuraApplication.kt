@@ -24,6 +24,7 @@ class AuraApplication : Application() {
         com.example.backup.BackupManager.finishInterruptedRestore(this)
         com.example.backup.BackupManager.removeOldSafetyCopy(this)
         com.example.backup.BackupManager.clearUnlockedCopies(this)
+        com.example.backup.BackupManager.clearPendingSaves(this)
         // Warm up database connection on application start
         AppDatabase.getInstance(this)
     }
