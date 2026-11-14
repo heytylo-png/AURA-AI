@@ -114,7 +114,8 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val coroutineScope = rememberCoroutineScope()
     val identity by viewModel.identity.collectAsState()
     val messages by viewModel.chatMessages.collectAsState()
-    val isGenerating by viewModel.isGenerating.collectAsState()
+    val anyReplyInProgress by viewModel.isGenerating.collectAsState()
+    val generatingSessionId by viewModel.generatingSessionId.collectAsState()
     val currentStreamingText by viewModel.currentStreamingText.collectAsState()
     val streamingModelUsed by viewModel.streamingModelUsed.collectAsState()
     val voiceState by viewModel.voiceState.collectAsState()
@@ -126,6 +127,9 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val actionFailures by viewModel.actionFailures.collectAsState()
     val recentSessions by viewModel.recentSessions.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
+    // A reply being written shows only in the chat it belongs to.
+    val isGenerating = anyReplyInProgress && (generatingSessionId == null || generatingSessionId == activeSession?.id)
+    val replyingElsewhere = anyReplyInProgress && !isGenerating
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     var inputText by remember { mutableStateOf("") }
@@ -404,6 +408,14 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     VoiceState.SPEAKING -> "Reading aloud. Tap \u25A0 or start typing to stop."
                     VoiceState.IDLE -> null
                 }
+                if (replyingElsewhere) {
+                    Text(
+                        text = "${identity.name} is still replying in another chat. You can send here when it's done.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 4.dp).testTag("replying_elsewhere_caption")
+                    )
+                }
                 if (voiceCaption != null) {
                     Text(
                         text = voiceCaption,
@@ -447,9 +459,12 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     if (inputText.isNotBlank() && voiceState == VoiceState.IDLE) {
                         IconButton(
                             onClick = {
-                                val text = inputText
-                                inputText = ""
-                                viewModel.sendMessage(text)
+                                // Keep the text if it can't be sent yet (a reply is still being written).
+                                if (viewModel.sendMessage(inputText)) {
+                                    inputText = ""
+                                } else {
+                                    viewModel.voiceNotice("${identity.name} is still replying. Your message is kept; send it when the reply is done.")
+                                }
                                 coroutineScope.launch {
                                     if (totalItemCount > 0) {
                                         listState.animateScrollToItem(lastItemIndex)

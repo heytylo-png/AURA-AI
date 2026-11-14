@@ -1,9 +1,21 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -19,9 +31,12 @@ import androidx.compose.ui.unit.em
 
 /**
  * Shows AI replies with basic Markdown formatting: headings, bold, italics, strikethrough,
- * inline code, code blocks, bullet and numbered lists, quotes, rules and link text.
+ * inline code, code blocks, bullet and numbered lists, quotes, rules and links.
  *
  * Markers without a closing partner are shown as typed, so half-streamed replies never lose text.
+ *
+ * Web links (http and https only) can be tapped. A link's text can say anything, so tapping never
+ * opens it straight away: Aura first shows the real address and asks.
  */
 @Composable
 fun MarkdownText(
@@ -31,8 +46,41 @@ fun MarkdownText(
     color: Color = Color.Unspecified,
     codeBackground: Color = Color(0x33888888)
 ) {
-    val rendered = remember(text, codeBackground) { MarkdownRenderer.render(text, codeBackground) }
+    var linkToOpen by remember { mutableStateOf<String?>(null) }
+    val rendered = remember(text, codeBackground) {
+        MarkdownRenderer.render(text, codeBackground, onLink = { linkToOpen = it })
+    }
     Text(text = rendered, modifier = modifier, style = style, color = color)
+
+    val link = linkToOpen
+    if (link != null) {
+        val uriHandler = LocalUriHandler.current
+        AlertDialog(
+            onDismissRequest = { linkToOpen = null },
+            title = { Text("Open this link?") },
+            text = {
+                // The whole address, selectable, so it can be read or copied before opening.
+                SelectionContainer {
+                    Text(
+                        text = "It opens in your browser, at ${MarkdownRenderer.hostOf(link)}:\n\n$link",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.testTag("open_link_address")
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        linkToOpen = null
+                        runCatching { uriHandler.openUri(link) }
+                    },
+                    modifier = Modifier.testTag("open_link_confirm")
+                ) { Text("Open") }
+            },
+            dismissButton = { TextButton(onClick = { linkToOpen = null }) { Text("Cancel") } },
+            modifier = Modifier.testTag("open_link_dialog")
+        )
+    }
 }
 
 object MarkdownRenderer {
@@ -46,7 +94,53 @@ object MarkdownRenderer {
     /** Text with the Markdown markers removed, e.g. for reading aloud. */
     fun plainText(markdown: String): String = render(markdown, Color.Unspecified).text
 
-    fun render(markdown: String, codeBackground: Color): AnnotatedString = buildAnnotatedString {
+    private val WEB_ADDRESS = Regex("""https?://[^\s<>"]+""")
+
+    /** The site a web address points at, for showing before it is opened. */
+    fun hostOf(url: String): String =
+        url.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
+
+    /**
+     * [onLink], when given, makes web links tappable and is called with the address of the one
+     * tapped. Only http and https addresses become links; anything else stays plain text.
+     */
+    fun render(markdown: String, codeBackground: Color, onLink: ((String) -> Unit)? = null): AnnotatedString = buildAnnotatedString {
+        this@MarkdownRenderer.onLink.set(onLink)
+        try {
+            renderLines(markdown, codeBackground)
+        } finally {
+            this@MarkdownRenderer.onLink.remove()
+        }
+    }.trimTrailingNewlines()
+
+    private val insideLinkText = ThreadLocal<Boolean>()
+
+    /** The ")" that ends a link's address starting at [from], allowing "(...)" inside the address. */
+    private fun closingParen(text: String, from: Int): Int {
+        var depth = 0
+        for (j in from until text.length) {
+            when (text[j]) {
+                '(' -> depth++
+                ')' -> if (depth == 0) return j else depth--
+            }
+        }
+        return -1
+    }
+
+    // The handler for the render in progress on this thread (rendering is recursive but not re-entrant).
+    private val onLink = ThreadLocal<((String) -> Unit)?>()
+
+    private fun AnnotatedString.Builder.appendLink(url: String, content: AnnotatedString.Builder.() -> Unit) {
+        val handler = onLink.get()
+        val underline = SpanStyle(textDecoration = TextDecoration.Underline)
+        if (handler == null || !WEB_ADDRESS.matches(url)) {
+            withStyle(underline) { content() }
+        } else {
+            withLink(LinkAnnotation.Clickable(tag = url, styles = TextLinkStyles(style = underline)) { handler(url) }) { content() }
+        }
+    }
+
+    private fun AnnotatedString.Builder.renderLines(markdown: String, codeBackground: Color) {
         val code = SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground)
         var inFence = false
         val lines = markdown.replace("\r\n", "\n").split("\n")
@@ -63,7 +157,7 @@ object MarkdownRenderer {
             }
             if (index < lines.lastIndex) append('\n')
         }
-    }.trimTrailingNewlines()
+    }
 
     private fun AnnotatedString.trimTrailingNewlines(): AnnotatedString {
         var end = text.length
@@ -130,12 +224,26 @@ object MarkdownRenderer {
                 c == '*' || (c == '_' && (i == 0 || !text[i - 1].isLetterOrDigit())) -> {
                     i = wrapped(text, i, c.toString(), SpanStyle(fontStyle = FontStyle.Italic), code)
                 }
+                (c == 'h') && (text.startsWith("https://", i) || text.startsWith("http://", i)) &&
+                    (i == 0 || !text[i - 1].isLetterOrDigit()) && insideLinkText.get() != true -> {
+                    // A bare web address. Punctuation that ends the sentence is not part of it.
+                    val url = WEB_ADDRESS.find(text, i)!!.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '\'', '*', '_')
+                    appendLink(url) { append(url) }
+                    i += url.length
+                }
                 c == '[' -> {
                     val close = text.indexOf("](", i + 1)
-                    val end = if (close > i + 1) text.indexOf(')', close + 2) else -1
+                    val end = if (close > i + 1) closingParen(text, close + 2) else -1
                     if (end > close) {
-                        withStyle(SpanStyle(textDecoration = TextDecoration.Underline)) {
-                            appendInline(text.substring(i + 1, close), code)
+                        // "[text](address)" or "[text](address "title")": the address is the first word.
+                        val url = text.substring(close + 2, end).trim().substringBefore(' ')
+                        // Inside a link's text, a web address is just text: the link goes where its
+                        // own address says, never somewhere else for part of it.
+                        insideLinkText.set(true)
+                        try {
+                            appendLink(url) { appendInline(text.substring(i + 1, close), code) }
+                        } finally {
+                            insideLinkText.set(false)
                         }
                         i = end + 1
                     } else {

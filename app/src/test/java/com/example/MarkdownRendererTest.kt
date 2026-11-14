@@ -67,6 +67,48 @@ class MarkdownRendererTest {
         assertEquals("see the docs now", render("see [the docs](https://example.com) now").text)
     }
 
+    private fun links(md: String): List<Pair<String, String>> {
+        val out = MarkdownRenderer.render(md, Color.Gray, onLink = {})
+        return out.getLinkAnnotations(0, out.length).map {
+            out.text.substring(it.start, it.end) to (it.item as androidx.compose.ui.text.LinkAnnotation.Clickable).tag
+        }
+    }
+
+    @Test
+    fun webLinksCanBeTappedAndCarryTheirRealAddress() {
+        assertEquals(listOf("the docs" to "https://example.com/a?b=1"), links("see [the docs](https://example.com/a?b=1) now"))
+        // The text can claim one site while the address is another: the address is what is kept.
+        assertEquals(listOf("https://bank.example" to "https://evil.example/login"), links("[https://bank.example](https://evil.example/login)"))
+        assertEquals(listOf("titled" to "http://example.org"), links("[titled](http://example.org \"a title\")"))
+        // Brackets inside an address belong to it.
+        assertEquals(listOf("wiki" to "https://en.example/wiki/Mercury_(planet)"), links("[wiki](https://en.example/wiki/Mercury_(planet)) is hot"))
+        assertEquals("wiki is hot", MarkdownRenderer.render("[wiki](https://en.example/wiki/Mercury_(planet)) is hot", Color.Gray).text)
+    }
+
+    @Test
+    fun bareWebAddressesBecomeLinksWithoutTheSentencePunctuation() {
+        assertEquals(listOf("https://example.com/page" to "https://example.com/page"), links("Read https://example.com/page."))
+        assertEquals(listOf("https://a.example/x_y" to "https://a.example/x_y"), links("(see https://a.example/x_y)"))
+        assertEquals("Read https://example.com/page.", MarkdownRenderer.render("Read https://example.com/page.", Color.Gray, onLink = {}).text)
+    }
+
+    @Test
+    fun onlyWebAddressesBecomeLinks() {
+        for (address in listOf("javascript:alert(1)", "intent://x#Intent;end", "file:///sdcard/a", "content://x/y", "tel:123", "mailto:a@b.c", "ftp://x.example")) {
+            assertTrue(address, links("[tap me]($address)").isEmpty())
+            assertEquals("tap me", MarkdownRenderer.render("[tap me]($address)", Color.Gray, onLink = {}).text)
+        }
+        // Without a handler (reading aloud, previews) nothing is a link.
+        assertTrue(render("[the docs](https://example.com)").getLinkAnnotations(0, 8).isEmpty())
+    }
+
+    @Test
+    fun theSiteShownBeforeOpeningIsTheRealOne() {
+        assertEquals("evil.example", MarkdownRenderer.hostOf("https://evil.example/login?next=bank.example"))
+        assertEquals("evil.example", MarkdownRenderer.hostOf("https://bank.example@evil.example/x"))
+        assertEquals("example.com:8443", MarkdownRenderer.hostOf("https://example.com:8443"))
+    }
+
     @Test
     fun plainTextForReadingAloud() {
         assertEquals("Hello world\n• item", MarkdownRenderer.plainText("**Hello** _world_\n- item"))

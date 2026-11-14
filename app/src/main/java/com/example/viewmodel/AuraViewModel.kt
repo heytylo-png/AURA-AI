@@ -385,7 +385,11 @@ class AuraViewModel @JvmOverloads constructor(
     private val _selectedTab = MutableStateFlow(0) // 0: Chat, 1: Memory, 2: Projects, 3: Tasks, 4: Identity
     val selectedTab: StateFlow<Int> = _selectedTab.asStateFlow()
 
-    private val _routingMode = MutableStateFlow(HybridRoutingMode.AUTO_HYBRID)
+    // Remembered across restarts (kept with the other privacy choices, so backups include it).
+    private val _routingMode = MutableStateFlow(
+        runCatching { HybridRoutingMode.valueOf(privacyPrefs.getString("routing_mode", null) ?: "") }
+            .getOrDefault(HybridRoutingMode.AUTO_HYBRID)
+    )
     val routingMode: StateFlow<HybridRoutingMode> = _routingMode.asStateFlow()
 
     private val _activeProject = MutableStateFlow<ProjectEntity?>(null)
@@ -551,6 +555,7 @@ class AuraViewModel @JvmOverloads constructor(
     }
 
     fun setRoutingMode(mode: HybridRoutingMode) {
+        privacyPrefs.edit().putString("routing_mode", mode.name).apply()
         _routingMode.value = mode
     }
 
@@ -634,8 +639,12 @@ class AuraViewModel @JvmOverloads constructor(
         }
     }
 
-    fun sendMessage(text: String) {
-        if (text.isBlank() || _isGenerating.value) return
+    /**
+     * Sends a message. Returns false, and does nothing, if it can't be sent right now (it is blank,
+     * or a reply is still being written), so the caller can keep the text instead of losing it.
+     */
+    fun sendMessage(text: String): Boolean {
+        if (text.isBlank() || _isGenerating.value) return false
         val currentProj = _activeProject.value
         // Set before anything else runs, so a second tap can't send the message twice.
         _isGenerating.value = true
@@ -652,6 +661,7 @@ class AuraViewModel @JvmOverloads constructor(
                 }
                 val currentSessionId = _activeSession.value?.id ?: 1L
                 sessionId = currentSessionId
+                _generatingSessionId.value = currentSessionId
 
                 // Earlier Claude exchanges in this chat, read before the new message is saved.
                 // Only used if this message goes to the cloud.
@@ -779,6 +789,7 @@ class AuraViewModel @JvmOverloads constructor(
                 // (If the chat was cleared or deleted meanwhile, [cancelSend] already did this.)
                 if (sendJob === thisJob) {
                     sendJob = null
+                    _generatingSessionId.value = null
                     _isGenerating.value = false
                     _currentStreamingText.value = null
                     _streamingModelUsed.value = null
@@ -787,7 +798,15 @@ class AuraViewModel @JvmOverloads constructor(
         }
         sendJob = job
         job.start()
+        return true
     }
+
+    /**
+     * The chat the reply in progress belongs to (null when none, or before its chat is known), so
+     * only that chat shows the reply being written when the user looks at another one meanwhile.
+     */
+    private val _generatingSessionId = MutableStateFlow<Long?>(null)
+    val generatingSessionId: StateFlow<Long?> = _generatingSessionId.asStateFlow()
 
     /** The reply being produced, if any. */
     private var sendJob: kotlinx.coroutines.Job? = null
@@ -796,6 +815,7 @@ class AuraViewModel @JvmOverloads constructor(
     private fun cancelSend() {
         sendJob?.cancel()
         sendJob = null
+        _generatingSessionId.value = null
         _isGenerating.value = false
         _currentStreamingText.value = null
         _streamingModelUsed.value = null
