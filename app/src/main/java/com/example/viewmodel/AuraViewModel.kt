@@ -560,6 +560,8 @@ class AuraViewModel @JvmOverloads constructor(
         seedInitialDataIfNeeded()
         // An action left EXECUTING means the app was killed mid-run; its writes were rolled back.
         viewModelScope.launch { actionExecutor.recoverInterrupted() }
+        // Images from chats deleted while the app was closed (or before a crash) are removed.
+        deleteUnusedImages()
         // Recently deleted to-dos are kept for 30 days, then removed for good.
         viewModelScope.launch { todoDao.purgeDeletedBefore(TodoRules.purgeCutoff(System.currentTimeMillis())) }
     }
@@ -600,6 +602,22 @@ class AuraViewModel @JvmOverloads constructor(
         }
     }
 
+    /** Reads an image the user picked and prepares it on the phone (upright, shrunk, no metadata). */
+    suspend fun prepareImage(uri: android.net.Uri): Result<com.example.data.model.ChatImages.Prepared> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { com.example.data.model.ChatImages.prepare(getApplication(), uri) }
+        }
+
+    /** Deletes stored images that no message refers to any more (after chats are cleared or deleted). */
+    private fun deleteUnusedImages() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val inUse = db.chatMessageDao().imageNamesInUse().toSet()
+                com.example.data.model.ChatImages.deleteUnused(getApplication(), inUse)
+            }
+        }
+    }
+
     fun deleteChatSession(session: ChatSessionEntity) {
         viewModelScope.launch {
             if (_activeSession.value?.id == session.id) cancelSend()
@@ -614,6 +632,7 @@ class AuraViewModel @JvmOverloads constructor(
                 }
                 loadChatMessages()
             }
+            deleteUnusedImages()
         }
     }
 
@@ -657,8 +676,8 @@ class AuraViewModel @JvmOverloads constructor(
      * Sends a message. Returns false, and does nothing, if it can't be sent right now (it is blank,
      * or a reply is still being written), so the caller can keep the text instead of losing it.
      */
-    fun sendMessage(text: String): Boolean {
-        if (text.isBlank() || _isGenerating.value) return false
+    fun sendMessage(text: String, image: com.example.data.model.ChatImages.Prepared? = null): Boolean {
+        if ((text.isBlank() && image == null) || _isGenerating.value) return false
         val currentProj = _activeProject.value
         // Set before anything else runs, so a second tap can't send the message twice.
         _isGenerating.value = true
@@ -696,11 +715,18 @@ class AuraViewModel @JvmOverloads constructor(
                 }
 
                 // 1. Insert User Message
+                // An attached image is stored on the phone with the message, then sent once with it.
+                val imageName = image?.let {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.example.data.model.ChatImages.save(getApplication(), it)
+                    }
+                }
                 val userMsg = ChatMessageEntity(
                     sender = Sender.USER,
-                    text = text,
+                    text = text.trim(),
                     associatedProjectId = currentProj?.id,
-                    sessionId = currentSessionId
+                    sessionId = currentSessionId,
+                    imageName = imageName
                 )
                 chatRepository.insertMessage(userMsg)
 
@@ -728,7 +754,8 @@ class AuraViewModel @JvmOverloads constructor(
                     sharedTodos = sharedTodoList,
                     sharedTodosTotal = sharedTodoTotal,
                     sharedProject = sharedProject,
-                    allowWebSearch = webSearch.value
+                    allowWebSearch = webSearch.value,
+                    image = image?.jpeg
                 ).collect { state ->
                     when (state) {
                         is HybridAiState.Starting -> {}
@@ -968,6 +995,7 @@ class AuraViewModel @JvmOverloads constructor(
             todoDao.clearProject(project.id)
             // A later project could reuse the ID; it must not inherit sharing.
             setProjectShared(project.id, false)
+            deleteUnusedImages()
         }
     }
 
@@ -1065,6 +1093,7 @@ class AuraViewModel @JvmOverloads constructor(
         _streamingActivity.value = null
         _isGenerating.value = false
         _chatMessages.value = emptyList()
+        deleteUnusedImages()
     }
 
     fun clearCurrentChat() {

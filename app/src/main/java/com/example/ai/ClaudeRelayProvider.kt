@@ -67,7 +67,8 @@ class ClaudeRelayProvider(
                     openTodos = request.openTodos,
                     openTodosTotal = request.openTodosTotal,
                     sharedProject = request.sharedProject,
-                    webSearch = request.allowWebSearch
+                    webSearch = request.allowWebSearch,
+                    imageAttached = request.image != null
                 )
             )
             .put("messages", messagesJson(request))
@@ -265,8 +266,23 @@ class ClaudeRelayProvider(
         /** Earlier turns, oldest first, then the new message. */
         fun messagesJson(request: AiProviderRequest): JSONArray {
             val array = JSONArray()
-            (request.history + ChatTurn(ChatTurn.Role.USER, request.prompt)).forEach { turn ->
+            request.history.forEach { turn ->
                 array.put(JSONObject().put("role", turn.role.wire).put("content", turn.text))
+            }
+            val image = request.image
+            if (image == null) {
+                array.put(JSONObject().put("role", "user").put("content", request.prompt))
+            } else {
+                // The image first, then the question about it (if any).
+                val blocks = JSONArray().put(
+                    JSONObject().put("type", "image").put(
+                        "source",
+                        JSONObject().put("type", "base64").put("media_type", "image/jpeg")
+                            .put("data", android.util.Base64.encodeToString(image, android.util.Base64.NO_WRAP))
+                    )
+                )
+                if (request.prompt.isNotBlank()) blocks.put(JSONObject().put("type", "text").put("text", request.prompt))
+                array.put(JSONObject().put("role", "user").put("content", blocks))
             }
             return array
         }

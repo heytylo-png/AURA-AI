@@ -26,6 +26,9 @@ object CloudHistory {
     /** Character budget for the history; the relay accepts 100,000 characters in total. */
     const val MAX_CHARS = 40_000
 
+    /** Stands in for an image from an earlier message, which is not sent again. */
+    const val IMAGE_NOT_RESENT = "[The user attached an image to this message. It isn't sent again, so you can't see it now.]"
+
     fun fromMessages(
         messages: List<ChatMessageEntity>,
         maxExchanges: Int = MAX_EXCHANGES,
@@ -40,11 +43,13 @@ object CloudHistory {
             val user = messages[i]
             val reply = messages[i + 1]
             if (user.timestamp < since || reply.timestamp < since) continue
-            if (user.sender == Sender.USER && user.text.isNotBlank() &&
+            if (user.sender == Sender.USER && (user.text.isNotBlank() || user.imageName != null) &&
                 reply.sender == Sender.AI && reply.modelUsed == AiModelUsed.CLOUD && reply.text.isNotBlank()
             ) {
                 val note = reply.proposedActionId?.let { actions[it] }?.let { outcomeNote(it) }
-                exchanges += user.text to (if (note == null) reply.text else "${reply.text}\n\n$note")
+                // Images are sent once, with their own message; later requests only say one was there.
+                val userText = if (user.imageName == null) user.text else "${user.text.trim()}\n\n$IMAGE_NOT_RESENT".trim()
+                exchanges += userText to (if (note == null) reply.text else "${reply.text}\n\n$note")
             }
         }
 

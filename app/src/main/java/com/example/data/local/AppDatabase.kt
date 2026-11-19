@@ -23,7 +23,7 @@ import com.example.data.model.TodoEntity
  *  2. the new schema file committed under app/schemas/ (written by the build),
  * DatabaseUpgradeTest fails until both exist.
  */
-const val DATABASE_VERSION = 7
+const val DATABASE_VERSION = 8
 
 @Database(
     entities = [
@@ -110,8 +110,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 7 -> 8: a chat message can carry an attached image (its file name). Existing messages have none. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN imageName TEXT")
+            }
+        }
+
         /** Every schema upgrade, in order. */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
 
         @Volatile
         private var INSTANCE: AppDatabase? = null

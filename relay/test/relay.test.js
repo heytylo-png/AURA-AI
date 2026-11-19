@@ -1,7 +1,7 @@
 // Run with: node --test relay/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool } from "../src/index.js";
+import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool, MAX_IMAGE_BASE64_CHARS } from "../src/index.js";
 
 const PROJECT = "aura-test-project";
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -472,4 +472,56 @@ test("replies with web search have their own daily cap; plain chat is unaffected
   assert.equal(blocked.sent, undefined, "nothing reached Claude");
   // Without web search the same user can still chat.
   assert.equal((await chatWith({}, env)).res.status, 200);
+});
+
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49]).toString("base64");
+const image = (extra = {}) => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: JPEG, ...extra } });
+
+test("an image can come with the newest message, rebuilt from checked fields only", async () => {
+  const ok = validateChatBody({
+    messages: [
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "reply" },
+      { role: "user", content: [{ ...image(), cache_control: { type: "ephemeral" }, extra: 1 }, { type: "text", text: "What is this?", citations: [] }] },
+    ],
+  });
+  assert.deepEqual(ok.messages[2].content, [
+    { type: "image", source: { type: "base64", media_type: "image/jpeg", data: JPEG } },
+    { type: "text", text: "What is this?" },
+  ]);
+  // An image on its own is fine.
+  assert.deepEqual(validateChatBody({ messages: [{ role: "user", content: [image()] }] }).messages[0].content, [image()]);
+  assert.deepEqual(validateChatBody({ messages: [{ role: "user", content: [image(), { type: "text", text: "  " }] }] }).messages[0].content, [image()]);
+});
+
+test("images are refused anywhere else, in other forms, or too large", () => {
+  const refused = (messages, status = 400) => {
+    try {
+      validateChatBody({ messages });
+      assert.fail("expected a refusal");
+    } catch (e) {
+      assert.ok(e instanceof RelayError, String(e));
+      assert.equal(e.status, status);
+    }
+  };
+  // Not in an earlier message, and not from the assistant.
+  refused([{ role: "user", content: [image()] }, { role: "assistant", content: "x" }, { role: "user", content: "y" }]);
+  // Only one image, image first, no other block types, no URLs or files.
+  refused([{ role: "user", content: [image(), image()] }]);
+  refused([{ role: "user", content: [{ type: "text", text: "a" }, image()] }]);
+  refused([{ role: "user", content: [{ type: "text", text: "plain text needs no blocks" }] }]);
+  refused([{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: JPEG } }] }]);
+  refused([{ role: "user", content: [{ type: "image", source: { type: "url", url: "https://example.com/a.jpg" } }] }]);
+  refused([{ role: "user", content: [{ type: "image", source: { type: "file", file_id: "file_1" } }] }]);
+  refused([{ role: "user", content: [image({ media_type: "image/svg+xml" })] }]);
+  refused([{ role: "user", content: [image({ data: "not base64!" })] }]);
+  refused([{ role: "user", content: [image({ data: "" })] }]);
+  refused([{ role: "user", content: [image({ data: "A".repeat(MAX_IMAGE_BASE64_CHARS + 4) })] }], 413);
+});
+
+test("an image reaches Claude as one image block", async () => {
+  const { res, sent } = await chatWith({ messages: [{ role: "user", content: [image(), { type: "text", text: "What is this?" }] }] });
+  assert.equal(res.status, 200);
+  assert.equal(sent.messages[0].content[0].type, "image");
+  assert.equal(sent.messages[0].content[0].source.data, JPEG);
 });

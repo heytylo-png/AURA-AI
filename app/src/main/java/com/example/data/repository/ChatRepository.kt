@@ -111,7 +111,7 @@ class DefaultChatRepository @JvmOverloads constructor(
                 dao.updateSession(
                     session.copy(
                         title = updatedTitle,
-                        lastMessageSnippet = message.text.take(65).trim(),
+                        lastMessageSnippet = message.text.take(65).trim().ifEmpty { if (message.imageName != null) "Image" else "" },
                         lastModifiedAt = message.timestamp
                     )
                 )

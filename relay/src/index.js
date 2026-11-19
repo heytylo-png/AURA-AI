@@ -261,6 +261,44 @@ export async function verifyFirebaseIdToken(token, projectId, getKey, now) {
   return payload.sub;
 }
 
+// One image may come with the newest user message. The app sends it already shrunk (about
+// 1,568 pixels on the long side, JPEG); this limit only stops oversized or abusive requests.
+export const MAX_IMAGE_BASE64_CHARS = 4_000_000;
+const IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * The newest user message may be a list of blocks instead of text: at most one image and at most
+ * one text block, in that order. The blocks are rebuilt here from the checked fields only, so
+ * nothing else the app puts in them reaches the Claude API.
+ */
+function cleanBlocks(content, i) {
+  const bad = (why) => new RelayError(400, "invalid_request", `messages[${i}]: ${why}`);
+  if (!Array.isArray(content) || content.length === 0 || content.length > 2) throw bad("content must be text, or 1 to 2 blocks.");
+  let image = null;
+  let text = null;
+  for (const block of content) {
+    if (block?.type === "image" && !image && !text) {
+      const source = block.source;
+      if (source?.type !== "base64" || !IMAGE_MEDIA_TYPES.includes(source.media_type) || typeof source.data !== "string") {
+        throw bad("an image must be base64 JPEG, PNG, WebP or GIF.");
+      }
+      if (source.data.length > MAX_IMAGE_BASE64_CHARS) {
+        throw new RelayError(413, "request_too_large", "The image is too large.");
+      }
+      if (source.data.length === 0 || source.data.length % 4 !== 0 || !BASE64.test(source.data)) throw bad("the image data isn't valid base64.");
+      image = { type: "image", source: { type: "base64", media_type: source.media_type, data: source.data } };
+    } else if (block?.type === "text" && !text && typeof block.text === "string") {
+      text = block.text.trim() === "" ? null : { type: "text", text: block.text };
+      if (text === null && !image) throw bad("a text block needs text.");
+    } else {
+      throw bad("only one image followed by one text block is allowed.");
+    }
+  }
+  if (!image) throw bad("blocks are only for sending an image; send plain text otherwise.");
+  return { blocks: [image, ...(text ? [text] : [])], textLength: text ? text.text.length : 0 };
+}
+
 /** Validates and normalises the app's request body. Throws RelayError(400). */
 export function validateChatBody(body) {
   if (!body || typeof body !== "object") throw new RelayError(400, "invalid_request", "Body must be a JSON object.");
@@ -272,7 +310,14 @@ export function validateChatBody(body) {
     throw new RelayError(400, "invalid_request", `messages must contain 1 to ${MAX_MESSAGES} items.`);
   }
   let total = 0;
+  const last = messages.length - 1;
   const clean = messages.map((m, i) => {
+    // Only the newest message, from the user, may carry an image.
+    if (i === last && m?.role === "user" && Array.isArray(m.content)) {
+      const { blocks, textLength } = cleanBlocks(m.content, i);
+      total += textLength;
+      return { role: "user", content: blocks };
+    }
     if (!m || (m.role !== "user" && m.role !== "assistant") || typeof m.content !== "string" || m.content.trim() === "") {
       throw new RelayError(400, "invalid_request", `messages[${i}] needs role user/assistant and non-empty text content.`);
     }
