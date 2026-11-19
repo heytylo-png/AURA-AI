@@ -180,6 +180,16 @@ class AuraViewModel @JvmOverloads constructor(
 
     // Off by default: replies are read in the user's ElevenLabs voice. The text goes to ElevenLabs
     // through the relay; on any failure Aura says why and uses the phone's voice instead.
+    // Off by default: Claude may search the web for a reply. Its search queries (which it writes,
+    // and which can draw on the conversation) go to a search engine through Anthropic.
+    private val _webSearch = MutableStateFlow(privacyPrefs.getBoolean("web_search_enabled", false))
+    val webSearch: StateFlow<Boolean> = _webSearch.asStateFlow()
+
+    fun setWebSearch(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("web_search_enabled", enabled).apply()
+        _webSearch.value = enabled
+    }
+
     private val _elevenLabsVoice = MutableStateFlow(privacyPrefs.getBoolean("elevenlabs_voice", false))
     val elevenLabsVoice: StateFlow<Boolean> = _elevenLabsVoice.asStateFlow()
 
@@ -401,6 +411,10 @@ class AuraViewModel @JvmOverloads constructor(
 
     private val _currentStreamingText = MutableStateFlow<String?>(null)
     val currentStreamingText: StateFlow<String?> = _currentStreamingText.asStateFlow()
+
+    /** What Claude is doing while it writes, e.g. searching the web (null when nothing to show). */
+    private val _streamingActivity = MutableStateFlow<String?>(null)
+    val streamingActivity: StateFlow<String?> = _streamingActivity.asStateFlow()
 
     private val _streamingModelUsed = MutableStateFlow<AiModelUsed?>(null)
     val streamingModelUsed: StateFlow<AiModelUsed?> = _streamingModelUsed.asStateFlow()
@@ -713,17 +727,22 @@ class AuraViewModel @JvmOverloads constructor(
                     allowProposals = claudeProposals.value,
                     sharedTodos = sharedTodoList,
                     sharedTodosTotal = sharedTodoTotal,
-                    sharedProject = sharedProject
+                    sharedProject = sharedProject,
+                    allowWebSearch = webSearch.value
                 ).collect { state ->
                     when (state) {
                         is HybridAiState.Starting -> {}
                         is HybridAiState.Streaming -> {
                             _currentStreamingText.value = state.text
                             _streamingModelUsed.value = state.modelUsed
+                            // New text means the search is done and Claude is writing again.
+                            _streamingActivity.value = null
                         }
+                        is HybridAiState.Searching -> _streamingActivity.value = "Searching the web for \u201c${state.query}\u201d\u2026"
                         is HybridAiState.Completed -> {
                             _isGenerating.value = false
                             _currentStreamingText.value = null
+                            _streamingActivity.value = null
                             _streamingModelUsed.value = null
 
                             // Save proposed action if any
@@ -752,6 +771,7 @@ class AuraViewModel @JvmOverloads constructor(
                         is HybridAiState.Error -> {
                             _isGenerating.value = false
                             _currentStreamingText.value = null
+                            _streamingActivity.value = null
                             val errorMsg = ChatMessageEntity(
                                 sender = Sender.AI,
                                 text = "Error: ${state.message}",
@@ -792,6 +812,7 @@ class AuraViewModel @JvmOverloads constructor(
                     _generatingSessionId.value = null
                     _isGenerating.value = false
                     _currentStreamingText.value = null
+                    _streamingActivity.value = null
                     _streamingModelUsed.value = null
                 }
             }
@@ -818,6 +839,7 @@ class AuraViewModel @JvmOverloads constructor(
         _generatingSessionId.value = null
         _isGenerating.value = false
         _currentStreamingText.value = null
+        _streamingActivity.value = null
         _streamingModelUsed.value = null
     }
 
@@ -1040,6 +1062,7 @@ class AuraViewModel @JvmOverloads constructor(
             chatRepository.clearProjectChat(proj.id)
         }
         _currentStreamingText.value = null
+        _streamingActivity.value = null
         _isGenerating.value = false
         _chatMessages.value = emptyList()
     }

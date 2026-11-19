@@ -117,6 +117,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val anyReplyInProgress by viewModel.isGenerating.collectAsState()
     val generatingSessionId by viewModel.generatingSessionId.collectAsState()
     val currentStreamingText by viewModel.currentStreamingText.collectAsState()
+    val streamingActivity by viewModel.streamingActivity.collectAsState()
     val streamingModelUsed by viewModel.streamingModelUsed.collectAsState()
     val voiceState by viewModel.voiceState.collectAsState()
     val sharedProjectIds by viewModel.sharedProjectIds.collectAsState()
@@ -137,7 +138,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
 
-    val totalItemCount = messages.size + if (isGenerating) 1 else 0
+    val totalItemCount = messages.size + (if (isGenerating) 1 else 0) + (if (isGenerating && streamingActivity != null) 1 else 0)
     val lastItemIndex = (totalItemCount - 1).coerceAtLeast(0)
 
     val isAtBottom by remember {
@@ -350,6 +351,18 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     } else if (isGenerating) {
                         item(key = "generating_indicator") {
                             ThinkingRow(aiName = identity.name, modifier = Modifier.padding(vertical = 6.dp))
+                        }
+                    }
+                    // What Claude is doing right now, e.g. which web search it is running.
+                    val activity = streamingActivity
+                    if (isGenerating && activity != null) {
+                        item(key = "streaming_activity") {
+                            Text(
+                                text = activity,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp).testTag("streaming_activity")
+                            )
                         }
                     }
                 }

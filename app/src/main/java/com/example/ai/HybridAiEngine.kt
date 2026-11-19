@@ -23,6 +23,8 @@ enum class HybridRoutingMode(val label: String, val description: String) {
 sealed interface HybridAiState {
     data object Starting : HybridAiState
     data class Streaming(val text: String, val modelUsed: AiModelUsed) : HybridAiState
+    /** Claude is searching the web for [query] while it writes the reply. */
+    data class Searching(val query: String) : HybridAiState
     data class Completed(
         val fullText: String,
         val modelUsed: AiModelUsed,
@@ -81,7 +83,9 @@ class HybridAiEngine(
         /** Total open to-dos, when [sharedTodos] may be capped. */
         sharedTodosTotal: Int = sharedTodos.size,
         /** Set only when the user shared the project being chatted in. */
-        sharedProject: CloudProject? = null
+        sharedProject: CloudProject? = null,
+        /** The user's "Let Claude search the web" switch. */
+        allowWebSearch: Boolean = false
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
@@ -148,7 +152,8 @@ class HybridAiEngine(
             currentProject = currentProject,
             userSettings = userSettings,
             history = history,
-            allowProposals = allowProposals
+            allowProposals = allowProposals,
+            allowWebSearch = allowWebSearch
         ).forCloud(sharePersonalContext).copy(
             openTodos = sharedTodos.take(CloudTodos.MAX),
             openTodosTotal = if (sharedTodos.isEmpty()) 0 else maxOf(sharedTodosTotal, sharedTodos.take(CloudTodos.MAX).size),
@@ -172,6 +177,7 @@ class HybridAiEngine(
                         streamedText = event.text
                         emit(HybridAiState.Streaming(event.text, AiModelUsed.CLOUD))
                     }
+                    is AiProviderEvent.Searching -> emit(HybridAiState.Searching(event.query))
                     is AiProviderEvent.Completed -> completed = event
                     is AiProviderEvent.Error -> failure = event.message
                 }
@@ -192,15 +198,24 @@ class HybridAiEngine(
                     else "Claude suggested a change that Aura couldn't show."
                 }
                 // The relay caps how long a reply may be; say so instead of showing a cut-off answer as whole.
-                val text = if (done.cutOff) "$body\n\n\u26a0 $CUT_OFF_NOTE" else body
-                val cutOffNote = if (done.cutOff) " The reply reached the length limit and was cut off." else ""
+                val withSources = body + sourcesSection(done.sources)
+                val text = when {
+                    done.cutOff -> "$withSources\n\n\u26a0 $CUT_OFF_NOTE"
+                    done.searchCutShort -> "$withSources\n\n\u26a0 $SEARCH_CUT_SHORT_NOTE"
+                    else -> withSources
+                }
+                val cutOffNote = when {
+                    done.cutOff -> " The reply reached the length limit and was cut off."
+                    done.searchCutShort -> " The web search ran out of time, so the reply may be incomplete."
+                    else -> ""
+                }
                 emit(
                     HybridAiState.Completed(
                         fullText = text,
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
                         reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " +
-                            sentSummary(history, providerRequest) + dropped + cutOffNote,
+                            sentSummary(history, providerRequest) + searchSummary(done.webSearches) + dropped + cutOffNote,
                         proposedAction = card
                     )
                 )
@@ -289,8 +304,32 @@ class HybridAiEngine(
 
     private fun plural(n: Int, word: String) = "$n $word${if (n == 1) "" else "s"}"
 
+    /** Says what Claude searched for: the queries are written by Claude and go to a search engine. */
+    internal fun searchSummary(queries: List<String>): String {
+        if (queries.isEmpty()) return ""
+        val shown = queries.take(MAX_QUERIES_SHOWN).joinToString(", ") { "\"$it\"" }
+        val more = if (queries.size > MAX_QUERIES_SHOWN) " and ${queries.size - MAX_QUERIES_SHOWN} more" else ""
+        return " Claude searched the web ${if (queries.size == 1) "once" else "${queries.size} times"}: $shown$more."
+    }
+
+    /** The pages Claude cited, as links under the reply. */
+    internal fun sourcesSection(sources: List<WebSource>): String {
+        if (sources.isEmpty()) return ""
+        return buildString {
+            append("\n\n**Sources**")
+            sources.take(MAX_SOURCES_SHOWN).forEachIndexed { i, s ->
+                // Brackets in a title would end the link text early.
+                val title = s.title.replace('[', '(').replace(']', ')').take(120)
+                append("\n${i + 1}. [$title](${s.url})")
+            }
+        }
+    }
+
     internal companion object {
         const val CUT_OFF_NOTE = "This answer was cut off because it reached the length limit. Ask Claude to continue."
+        const val SEARCH_CUT_SHORT_NOTE = "The web search ran out of time, so this answer may be incomplete."
+        const val MAX_QUERIES_SHOWN = 5
+        const val MAX_SOURCES_SHOWN = 8
 
         /** Typed commands handled on the phone in Auto mode (see [shouldRouteToLocal]). */
         val LOCAL_COMMANDS = listOf(

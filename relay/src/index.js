@@ -17,6 +17,8 @@
 //   MAX_OUTPUT_TOKENS   var, default 2048
 //   DAILY_CHAT_LIMIT    var, default 300: chat requests per user per day (needs the USAGE binding)
 //   DAILY_SPEAK_LIMIT   var, default 150: speech requests per user per day (needs the USAGE binding)
+//   DAILY_SEARCH_LIMIT  var, default 100: chat requests with web search per user per day (needs USAGE)
+//   WEB_SEARCH_MAX_USES var, default 3: most web searches Claude may run for one reply
 //   USAGE               optional KV namespace that holds the daily counts
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -122,6 +124,22 @@ export async function withinLimit(limiter, uid) {
 
 export const DEFAULT_DAILY_CHAT_LIMIT = 300;
 export const DEFAULT_DAILY_SPEAK_LIMIT = 150;
+export const DEFAULT_DAILY_SEARCH_LIMIT = 100;
+export const DEFAULT_WEB_SEARCH_MAX_USES = 3;
+const MAX_WEB_SEARCH_MAX_USES = 10;
+
+/**
+ * Anthropic's web search tool, added only when the app asks for it ("web": true, the user's switch).
+ * It runs on Anthropic's side; the relay never fetches anything itself. Each search is billed, so
+ * the number per reply is capped here, not by the app.
+ */
+export function webSearchTool(env) {
+  const configured = Number(env.WEB_SEARCH_MAX_USES);
+  const maxUses = Number.isInteger(configured) && configured >= 1
+    ? Math.min(configured, MAX_WEB_SEARCH_MAX_USES)
+    : DEFAULT_WEB_SEARCH_MAX_USES;
+  return { type: "web_search_20260209", name: "web_search", max_uses: maxUses };
+}
 
 /**
  * Per-user daily cap, counted in the USAGE key-value store under "<kind>:<user>:<UTC date>".
@@ -268,8 +286,11 @@ export function validateChatBody(body) {
   if (body.actions !== undefined && typeof body.actions !== "boolean") {
     throw new RelayError(400, "invalid_request", "actions must be true or false.");
   }
+  if (body.web !== undefined && typeof body.web !== "boolean") {
+    throw new RelayError(400, "invalid_request", "web must be true or false.");
+  }
   // Anything else the app sends (model, tools, max_tokens...) is ignored.
-  return { system: system || undefined, messages: clean, actions: body.actions === true };
+  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true };
 }
 
 export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = {}) {
@@ -373,6 +394,18 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
         throw new RelayError(400, "invalid_request", "Body must be valid JSON.");
       }
       const chat = validateChatBody(body);
+      // Web search costs extra per search, so requests that allow it have their own daily cap.
+      if (chat.web) {
+        const searchLimit = Number(env.DAILY_SEARCH_LIMIT) || DEFAULT_DAILY_SEARCH_LIMIT;
+        if (!(await withinDailyLimit(env.USAGE, "search", uid, searchLimit, now()))) {
+          throw new RelayError(
+            429,
+            "daily_limit",
+            `Today's limit of ${searchLimit} replies with web search is used up. It resets at midnight UTC; until then, turn off web search to keep chatting.`
+          );
+        }
+      }
+      const tools = [...(chat.actions ? PROPOSAL_TOOLS : []), ...(chat.web ? [webSearchTool(env)] : [])];
 
       const upstream = await fetchImpl(ANTHROPIC_URL, {
         method: "POST",
@@ -386,9 +419,9 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
           max_tokens: Number(env.MAX_OUTPUT_TOKENS) || DEFAULT_MAX_OUTPUT_TOKENS,
           ...(chat.system ? { system: chat.system } : {}),
           messages: chat.messages,
-          ...(chat.actions
-            ? { tools: PROPOSAL_TOOLS, tool_choice: { type: "auto", disable_parallel_tool_use: true } }
-            : {}),
+          ...(tools.length ? { tools } : {}),
+          // At most one proposal per reply; only set when the proposal tools are there.
+          ...(chat.actions ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
           stream: true,
         }),
       });

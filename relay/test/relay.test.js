@@ -1,7 +1,7 @@
 // Run with: node --test relay/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit } from "../src/index.js";
+import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool } from "../src/index.js";
 
 const PROJECT = "aura-test-project";
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -193,7 +193,7 @@ test("request bodies are validated", () => {
 
   assert.deepEqual(
     validateChatBody({ messages: [{ role: "user", content: "a", extra: 1 }, { role: "assistant", content: "b" }, { role: "user", content: "c" }] }),
-    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], actions: false }
+    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], actions: false, web: false }
   );
   assert.throws(() => validateChatBody({ messages: [{ role: "user", content: "x" }], actions: "yes" }), RelayError);
 });
@@ -410,4 +410,66 @@ test("a stranger's requests don't use up anyone's daily count", async () => {
   }), env);
   assert.equal(res.status, 403);
   assert.equal(env.USAGE.data.size, 0);
+});
+
+async function chatWith(body, envExtra = {}) {
+  let sent;
+  const { handle, env } = setup({
+    upstream: (init) => {
+      sent = JSON.parse(init.body);
+      return new Response("event: message_stop\ndata: {}\n\n", { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  Object.assign(env, envExtra);
+  const token = await makeToken();
+  const res = await handle(new Request("https://relay.example/v1/chat", {
+    method: "POST", headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ messages: [{ role: "user", content: "hi" }], ...body }),
+  }), env);
+  return { res, sent, env };
+}
+
+test("web search is added only when the app asks, with the relay's own cap", async () => {
+  const off = await chatWith({});
+  assert.equal(off.res.status, 200);
+  assert.equal(off.sent.tools, undefined);
+
+  const on = await chatWith({ web: true });
+  assert.equal(on.res.status, 200);
+  assert.deepEqual(on.sent.tools, [{ type: "web_search_20260209", name: "web_search", max_uses: 3 }]);
+  assert.equal(on.sent.tool_choice, undefined);
+
+  // Together with the proposal tools: both are there, and the one-proposal rule still applies.
+  const both = await chatWith({ web: true, actions: true });
+  assert.deepEqual(both.sent.tools.map((t) => t.name), [...PROPOSAL_TOOLS.map((t) => t.name), "web_search"]);
+  assert.deepEqual(both.sent.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+
+  // Whatever else the app sends is ignored.
+  const sneaky = await chatWith({ web: true, tools: [{ type: "web_fetch_20260209", name: "web_fetch" }], max_uses: 50 });
+  assert.deepEqual(sneaky.sent.tools, [{ type: "web_search_20260209", name: "web_search", max_uses: 3 }]);
+
+  const bad = await chatWith({ web: "yes" });
+  assert.equal(bad.res.status, 400);
+});
+
+test("searches per reply come from the relay setting, within bounds", () => {
+  assert.equal(webSearchTool({}).max_uses, 3);
+  assert.equal(webSearchTool({ WEB_SEARCH_MAX_USES: "5" }).max_uses, 5);
+  assert.equal(webSearchTool({ WEB_SEARCH_MAX_USES: "500" }).max_uses, 10);
+  assert.equal(webSearchTool({ WEB_SEARCH_MAX_USES: "0" }).max_uses, 3);
+  assert.equal(webSearchTool({ WEB_SEARCH_MAX_USES: "abc" }).max_uses, 3);
+});
+
+test("replies with web search have their own daily cap; plain chat is unaffected", async () => {
+  const store = fakeStore();
+  const env = { USAGE: store, DAILY_SEARCH_LIMIT: "1" };
+  assert.equal((await chatWith({ web: true }, env)).res.status, 200);
+  const blocked = await chatWith({ web: true }, env);
+  assert.equal(blocked.res.status, 429);
+  const err = (await blocked.res.json()).error;
+  assert.equal(err.type, "daily_limit");
+  assert.match(err.message, /web search/);
+  assert.equal(blocked.sent, undefined, "nothing reached Claude");
+  // Without web search the same user can still chat.
+  assert.equal((await chatWith({}, env)).res.status, 200);
 });

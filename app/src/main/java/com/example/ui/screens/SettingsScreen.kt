@@ -483,6 +483,33 @@ fun SettingsScreen(
                         )
                     }
 
+                    val webSearch by viewModel.webSearch.collectAsState()
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Let Claude search the web", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "Claude may run up to 3 web searches for a reply when it needs current information, and lists the pages it used. " +
+                                    "Claude writes the search queries and they go to a search engine, so they can include things from your chat. " +
+                                    "Each reply's details show exactly what was searched. Searches cost extra (about 1 cent each).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = webSearch,
+                            onCheckedChange = viewModel::setWebSearch,
+                            enabled = cloudChatEnabled,
+                            colors = auraSwitchColors(),
+                            modifier = Modifier.testTag("web_search_switch")
+                        )
+                    }
+
                     val elevenLabsVoice by viewModel.elevenLabsVoice.collectAsState()
                     Spacer(Modifier.height(14.dp))
                     Row(
