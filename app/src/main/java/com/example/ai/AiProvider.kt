@@ -21,6 +21,10 @@ data class AiProviderRequest(
     val history: List<ChatTurn> = emptyList(),
     /** Let Claude propose changes (save memory, create project, add milestone) as approval cards. */
     val allowProposals: Boolean = false,
+    /** The user's "Let Claude search the web" switch: Claude may run web searches for this reply. */
+    val allowWebSearch: Boolean = false,
+    /** An image attached to [prompt]: JPEG prepared on the phone (see ChatImages), or null. */
+    val image: ByteArray? = null,
     /** Open to-dos the user chose to share: titles and due dates only (see [CloudTodos]). */
     val openTodos: List<CloudTodo> = emptyList(),
     /** How many open to-dos the user has in total, so Claude knows whether [openTodos] is the whole list. */
@@ -46,8 +50,13 @@ object CloudTodos {
         .map { CloudTodo(it.title, it.dueEpochDay?.let { d -> com.example.data.model.TodoRules.formatDue(d) }) }
 }
 
+/** A web page Claude cited in its reply. */
+data class WebSource(val url: String, val title: String)
+
 sealed interface AiProviderEvent {
     data class Content(val text: String) : AiProviderEvent
+    /** Claude is searching the web for [query] (shown while the reply is being written). */
+    data class Searching(val query: String) : AiProviderEvent
     /** [modelName] is the model that actually answered, shown to the user (e.g. after a fallback). */
     data class Completed(
         val fullText: String,
@@ -56,7 +65,13 @@ sealed interface AiProviderEvent {
         /** A change Claude proposed with a tool in this reply; becomes an approval card after checks. */
         val toolCall: ToolCall? = null,
         /** The model stopped because it hit the output length limit, so the reply is incomplete. */
-        val cutOff: Boolean = false
+        val cutOff: Boolean = false,
+        /** The searches Claude ran for this reply, in order (the queries it wrote). */
+        val webSearches: List<String> = emptyList(),
+        /** Pages Claude cited, in the order first cited, each once. */
+        val sources: List<WebSource> = emptyList(),
+        /** The web search ran out of time (stop reason pause_turn), so the reply may be incomplete. */
+        val searchCutShort: Boolean = false
     ) : AiProviderEvent
     data class Error(val message: String) : AiProviderEvent
 }

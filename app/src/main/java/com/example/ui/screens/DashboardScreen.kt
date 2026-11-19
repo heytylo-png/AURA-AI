@@ -178,8 +178,9 @@ fun DashboardScreen(
                         onInputTextChange = { quickPromptText = it },
                         onSendMessage = { prompt ->
                             if (prompt.isNotBlank()) {
-                                viewModel.sendMessage(prompt)
-                                quickPromptText = ""
+                                // Keep the text if it can't be sent yet (a reply is still being written).
+                                if (viewModel.sendMessage(prompt)) quickPromptText = ""
+                                else viewModel.voiceNotice("${identity.name} is still replying. Your message is kept; send it when the reply is done.")
                                 onNavigateToChat()
                             }
                         },

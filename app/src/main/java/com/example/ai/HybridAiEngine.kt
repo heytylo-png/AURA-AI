@@ -23,6 +23,8 @@ enum class HybridRoutingMode(val label: String, val description: String) {
 sealed interface HybridAiState {
     data object Starting : HybridAiState
     data class Streaming(val text: String, val modelUsed: AiModelUsed) : HybridAiState
+    /** Claude is searching the web for [query] while it writes the reply. */
+    data class Searching(val query: String) : HybridAiState
     data class Completed(
         val fullText: String,
         val modelUsed: AiModelUsed,
@@ -81,15 +83,44 @@ class HybridAiEngine(
         /** Total open to-dos, when [sharedTodos] may be capped. */
         sharedTodosTotal: Int = sharedTodos.size,
         /** Set only when the user shared the project being chatted in. */
-        sharedProject: CloudProject? = null
+        sharedProject: CloudProject? = null,
+        /** The user's "Let Claude search the web" switch. */
+        allowWebSearch: Boolean = false,
+        /** An image attached to [prompt] (JPEG, prepared on the phone). Only Claude can read it. */
+        image: ByteArray? = null
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
 
+        // The phone can't read images, so a message with one goes to Claude or isn't answered.
+        // Never answered on the phone as if the image weren't there.
+        if (image != null) {
+            val blocked = when {
+                !allowCloudRequest -> notice(
+                    "Nothing was sent: only Claude can read images, and cloud chat is off. Turn on \"Cloud chat\" " +
+                        "in Settings \u2192 Cloud AI to ask about this image.",
+                    "Image attached with cloud chat off; nothing was sent."
+                )
+                mode == HybridRoutingMode.FORCE_LOCAL -> notice(
+                    "Nothing was sent: Local mode can't read images. Switch to Auto or Cloud to ask Claude about this image.",
+                    "Image attached in Local mode; nothing was sent."
+                )
+                !online -> notice(
+                    "You're offline, and only Claude can read images. Nothing was sent; try again when you're connected.",
+                    "Image attached while offline; nothing was sent."
+                )
+                else -> null
+            }
+            if (blocked != null) {
+                emit(blocked)
+                return@flow
+            }
+        }
+
         val routeToLocal = when (mode) {
             HybridRoutingMode.FORCE_LOCAL -> true
             HybridRoutingMode.FORCE_CLOUD -> !online // Force cloud unless device is strictly offline
-            HybridRoutingMode.AUTO_HYBRID -> !online || shouldRouteToLocal(prompt)
+            HybridRoutingMode.AUTO_HYBRID -> !online || (image == null && shouldRouteToLocal(prompt))
         }
 
         // Cloud use is explicitly opt-in.
@@ -148,7 +179,9 @@ class HybridAiEngine(
             currentProject = currentProject,
             userSettings = userSettings,
             history = history,
-            allowProposals = allowProposals
+            allowProposals = allowProposals,
+            allowWebSearch = allowWebSearch,
+            image = image
         ).forCloud(sharePersonalContext).copy(
             openTodos = sharedTodos.take(CloudTodos.MAX),
             openTodosTotal = if (sharedTodos.isEmpty()) 0 else maxOf(sharedTodosTotal, sharedTodos.take(CloudTodos.MAX).size),
@@ -172,6 +205,7 @@ class HybridAiEngine(
                         streamedText = event.text
                         emit(HybridAiState.Streaming(event.text, AiModelUsed.CLOUD))
                     }
+                    is AiProviderEvent.Searching -> emit(HybridAiState.Searching(event.query))
                     is AiProviderEvent.Completed -> completed = event
                     is AiProviderEvent.Error -> failure = event.message
                 }
@@ -192,15 +226,24 @@ class HybridAiEngine(
                     else "Claude suggested a change that Aura couldn't show."
                 }
                 // The relay caps how long a reply may be; say so instead of showing a cut-off answer as whole.
-                val text = if (done.cutOff) "$body\n\n\u26a0 $CUT_OFF_NOTE" else body
-                val cutOffNote = if (done.cutOff) " The reply reached the length limit and was cut off." else ""
+                val withSources = body + sourcesSection(done.sources)
+                val text = when {
+                    done.cutOff -> "$withSources\n\n\u26a0 $CUT_OFF_NOTE"
+                    done.searchCutShort -> "$withSources\n\n\u26a0 $SEARCH_CUT_SHORT_NOTE"
+                    else -> withSources
+                }
+                val cutOffNote = when {
+                    done.cutOff -> " The reply reached the length limit and was cut off."
+                    done.searchCutShort -> " The web search ran out of time, so the reply may be incomplete."
+                    else -> ""
+                }
                 emit(
                     HybridAiState.Completed(
                         fullText = text,
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
                         reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " +
-                            sentSummary(history, providerRequest) + dropped + cutOffNote,
+                            sentSummary(history, providerRequest) + searchSummary(done.webSearches) + dropped + cutOffNote,
                         proposedAction = card
                     )
                 )
@@ -217,7 +260,8 @@ class HybridAiEngine(
                     )
                 )
             }
-            mode == HybridRoutingMode.FORCE_CLOUD -> {
+            // The phone can't stand in for Claude on an image: say what failed instead of a keyword reply.
+            mode == HybridRoutingMode.FORCE_CLOUD || image != null -> {
                 emit(notice(
                     "Claude couldn't answer this message.\n\n${failure ?: "No reply was received."}",
                     "Cloud request failed: ${failure ?: "no reply"}. Your message was sent to the relay."
@@ -248,6 +292,7 @@ class HybridAiEngine(
                 "this message and the last $earlier earlier Claude exchange${if (earlier == 1) "" else "s"} in this chat",
             "the assistant's name and personality"
         )
+        if (sent.image != null) parts += "the image you attached (shrunk, with its location and other photo data removed)"
         if (sent.allowPersonalContext) {
             val n = sent.activeMemories.size
             if (n > 0) parts += "$n memor${if (n == 1) "y" else "ies"} you marked to share"
@@ -289,8 +334,32 @@ class HybridAiEngine(
 
     private fun plural(n: Int, word: String) = "$n $word${if (n == 1) "" else "s"}"
 
+    /** Says what Claude searched for: the queries are written by Claude and go to a search engine. */
+    internal fun searchSummary(queries: List<String>): String {
+        if (queries.isEmpty()) return ""
+        val shown = queries.take(MAX_QUERIES_SHOWN).joinToString(", ") { "\"$it\"" }
+        val more = if (queries.size > MAX_QUERIES_SHOWN) " and ${queries.size - MAX_QUERIES_SHOWN} more" else ""
+        return " Claude searched the web ${if (queries.size == 1) "once" else "${queries.size} times"}: $shown$more."
+    }
+
+    /** The pages Claude cited, as links under the reply. */
+    internal fun sourcesSection(sources: List<WebSource>): String {
+        if (sources.isEmpty()) return ""
+        return buildString {
+            append("\n\n**Sources**")
+            sources.take(MAX_SOURCES_SHOWN).forEachIndexed { i, s ->
+                // Brackets in a title would end the link text early.
+                val title = s.title.replace('[', '(').replace(']', ')').take(120)
+                append("\n${i + 1}. [$title](${s.url})")
+            }
+        }
+    }
+
     internal companion object {
         const val CUT_OFF_NOTE = "This answer was cut off because it reached the length limit. Ask Claude to continue."
+        const val SEARCH_CUT_SHORT_NOTE = "The web search ran out of time, so this answer may be incomplete."
+        const val MAX_QUERIES_SHOWN = 5
+        const val MAX_SOURCES_SHOWN = 8
 
         /** Typed commands handled on the phone in Auto mode (see [shouldRouteToLocal]). */
         val LOCAL_COMMANDS = listOf(

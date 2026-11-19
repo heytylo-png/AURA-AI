@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -79,6 +81,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -114,8 +117,10 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val coroutineScope = rememberCoroutineScope()
     val identity by viewModel.identity.collectAsState()
     val messages by viewModel.chatMessages.collectAsState()
-    val isGenerating by viewModel.isGenerating.collectAsState()
+    val anyReplyInProgress by viewModel.isGenerating.collectAsState()
+    val generatingSessionId by viewModel.generatingSessionId.collectAsState()
     val currentStreamingText by viewModel.currentStreamingText.collectAsState()
+    val streamingActivity by viewModel.streamingActivity.collectAsState()
     val streamingModelUsed by viewModel.streamingModelUsed.collectAsState()
     val voiceState by viewModel.voiceState.collectAsState()
     val sharedProjectIds by viewModel.sharedProjectIds.collectAsState()
@@ -126,6 +131,9 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val actionFailures by viewModel.actionFailures.collectAsState()
     val recentSessions by viewModel.recentSessions.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
+    // A reply being written shows only in the chat it belongs to.
+    val isGenerating = anyReplyInProgress && (generatingSessionId == null || generatingSessionId == activeSession?.id)
+    val replyingElsewhere = anyReplyInProgress && !isGenerating
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     var inputText by remember { mutableStateOf("") }
@@ -133,7 +141,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
 
-    val totalItemCount = messages.size + if (isGenerating) 1 else 0
+    val totalItemCount = messages.size + (if (isGenerating) 1 else 0) + (if (isGenerating && streamingActivity != null) 1 else 0)
     val lastItemIndex = (totalItemCount - 1).coerceAtLeast(0)
 
     val isAtBottom by remember {
@@ -154,6 +162,27 @@ fun ChatScreen(viewModel: AuraViewModel) {
             onPartial = { partial -> inputText = partial },
             onError = { reason -> viewModel.voiceNotice(reason) }
         )
+    }
+
+    // An image picked to send with the next message (prepared on the phone), and its preview.
+    var pendingImage by remember { mutableStateOf<com.example.data.model.ChatImages.Prepared?>(null) }
+    val pendingPreview = remember(pendingImage) {
+        pendingImage?.let { img ->
+            android.graphics.BitmapFactory.decodeByteArray(img.jpeg, 0, img.jpeg.size)?.asImageBitmap()
+        }
+    }
+    var preparingImage by remember { mutableStateOf(false) }
+    // Android's photo picker: shows only what the user picks, so Aura needs no storage permission.
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            preparingImage = true
+            coroutineScope.launch {
+                viewModel.prepareImage(uri)
+                    .onSuccess { pendingImage = it }
+                    .onFailure { viewModel.voiceNotice(it.message ?: "That image couldn't be read.") }
+                preparingImage = false
+            }
+        }
     }
 
     // Audio recording permission launcher
@@ -348,6 +377,18 @@ fun ChatScreen(viewModel: AuraViewModel) {
                             ThinkingRow(aiName = identity.name, modifier = Modifier.padding(vertical = 6.dp))
                         }
                     }
+                    // What Claude is doing right now, e.g. which web search it is running.
+                    val activity = streamingActivity
+                    if (isGenerating && activity != null) {
+                        item(key = "streaming_activity") {
+                            Text(
+                                text = activity,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp).testTag("streaming_activity")
+                            )
+                        }
+                    }
                 }
 
                 // Quick jump to bottom floating button when user has scrolled up
@@ -404,6 +445,14 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     VoiceState.SPEAKING -> "Reading aloud. Tap \u25A0 or start typing to stop."
                     VoiceState.IDLE -> null
                 }
+                if (replyingElsewhere) {
+                    Text(
+                        text = "${identity.name} is still replying in another chat. You can send here when it's done.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 4.dp).testTag("replying_elsewhere_caption")
+                    )
+                }
                 if (voiceCaption != null) {
                     Text(
                         text = voiceCaption,
@@ -413,11 +462,58 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     )
                 }
 
+                // The image waiting to be sent, with a way to take it off.
+                val preview = pendingPreview
+                if (preview != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        androidx.compose.foundation.Image(
+                            bitmap = preview,
+                            contentDescription = "Image to send",
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).testTag("pending_image")
+                        )
+                        Text(
+                            text = "Goes to Claude with your message. Location and other photo data are removed.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f).padding(horizontal = 10.dp)
+                        )
+                        IconButton(onClick = { pendingImage = null }, modifier = Modifier.testTag("remove_pending_image")) {
+                            Icon(Icons.Default.Close, contentDescription = "Remove image")
+                        }
+                    }
+                } else if (preparingImage) {
+                    Text(
+                        text = "Preparing the image on this phone\u2026",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 6.dp)
+                    )
+                }
+
                 // Input row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(
+                        onClick = {
+                            pickImage.launch(
+                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        enabled = !preparingImage,
+                        modifier = Modifier.testTag("attach_image_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AddPhotoAlternate,
+                            contentDescription = "Attach an image",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = {
@@ -444,12 +540,16 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     Spacer(Modifier.width(8.dp))
 
                     // While voice is active the button stays a stop control, even once words appear.
-                    if (inputText.isNotBlank() && voiceState == VoiceState.IDLE) {
+                    if ((inputText.isNotBlank() || pendingImage != null) && voiceState == VoiceState.IDLE) {
                         IconButton(
                             onClick = {
-                                val text = inputText
-                                inputText = ""
-                                viewModel.sendMessage(text)
+                                // Keep the text if it can't be sent yet (a reply is still being written).
+                                if (viewModel.sendMessage(inputText, pendingImage)) {
+                                    inputText = ""
+                                    pendingImage = null
+                                } else {
+                                    viewModel.voiceNotice("${identity.name} is still replying. Your message is kept; send it when the reply is done.")
+                                }
                                 coroutineScope.launch {
                                     if (totalItemCount > 0) {
                                         listState.animateScrollToItem(lastItemIndex)
@@ -738,7 +838,8 @@ fun ChatMessageItem(
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 horizontalAlignment = Alignment.End
             ) {
-                Text(
+                message.imageName?.let { name -> MessageImage(name) }
+                if (message.text.isNotBlank()) Text(
                     text = message.text,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
@@ -963,5 +1064,38 @@ fun EmptyChatWelcome(
                 )
             }
         }
+    }
+}
+
+
+/** An image the user sent, loaded small from Aura's private storage. */
+@Composable
+private fun MessageImage(name: String) {
+    val context = LocalContext.current
+    val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, name) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.example.data.model.ChatImages.file(context, name)
+                ?.let { com.example.data.model.ChatImages.thumbnail(it, 720) }?.asImageBitmap()
+        }
+    }
+    val image = bitmap
+    if (image != null) {
+        androidx.compose.foundation.Image(
+            bitmap = image,
+            contentDescription = "Image you sent",
+            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            modifier = Modifier
+                .padding(bottom = 6.dp)
+                .widthIn(max = 260.dp)
+                .heightIn(max = 260.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .testTag("message_image")
+        )
+    } else {
+        Text(
+            text = "[Image no longer on this phone]",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

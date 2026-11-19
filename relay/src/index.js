@@ -17,6 +17,8 @@
 //   MAX_OUTPUT_TOKENS   var, default 2048
 //   DAILY_CHAT_LIMIT    var, default 300: chat requests per user per day (needs the USAGE binding)
 //   DAILY_SPEAK_LIMIT   var, default 150: speech requests per user per day (needs the USAGE binding)
+//   DAILY_SEARCH_LIMIT  var, default 100: chat requests with web search per user per day (needs USAGE)
+//   WEB_SEARCH_MAX_USES var, default 3: most web searches Claude may run for one reply
 //   USAGE               optional KV namespace that holds the daily counts
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -122,6 +124,22 @@ export async function withinLimit(limiter, uid) {
 
 export const DEFAULT_DAILY_CHAT_LIMIT = 300;
 export const DEFAULT_DAILY_SPEAK_LIMIT = 150;
+export const DEFAULT_DAILY_SEARCH_LIMIT = 100;
+export const DEFAULT_WEB_SEARCH_MAX_USES = 3;
+const MAX_WEB_SEARCH_MAX_USES = 10;
+
+/**
+ * Anthropic's web search tool, added only when the app asks for it ("web": true, the user's switch).
+ * It runs on Anthropic's side; the relay never fetches anything itself. Each search is billed, so
+ * the number per reply is capped here, not by the app.
+ */
+export function webSearchTool(env) {
+  const configured = Number(env.WEB_SEARCH_MAX_USES);
+  const maxUses = Number.isInteger(configured) && configured >= 1
+    ? Math.min(configured, MAX_WEB_SEARCH_MAX_USES)
+    : DEFAULT_WEB_SEARCH_MAX_USES;
+  return { type: "web_search_20260209", name: "web_search", max_uses: maxUses };
+}
 
 /**
  * Per-user daily cap, counted in the USAGE key-value store under "<kind>:<user>:<UTC date>".
@@ -243,6 +261,44 @@ export async function verifyFirebaseIdToken(token, projectId, getKey, now) {
   return payload.sub;
 }
 
+// One image may come with the newest user message. The app sends it already shrunk (about
+// 1,568 pixels on the long side, JPEG); this limit only stops oversized or abusive requests.
+export const MAX_IMAGE_BASE64_CHARS = 4_000_000;
+const IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * The newest user message may be a list of blocks instead of text: at most one image and at most
+ * one text block, in that order. The blocks are rebuilt here from the checked fields only, so
+ * nothing else the app puts in them reaches the Claude API.
+ */
+function cleanBlocks(content, i) {
+  const bad = (why) => new RelayError(400, "invalid_request", `messages[${i}]: ${why}`);
+  if (!Array.isArray(content) || content.length === 0 || content.length > 2) throw bad("content must be text, or 1 to 2 blocks.");
+  let image = null;
+  let text = null;
+  for (const block of content) {
+    if (block?.type === "image" && !image && !text) {
+      const source = block.source;
+      if (source?.type !== "base64" || !IMAGE_MEDIA_TYPES.includes(source.media_type) || typeof source.data !== "string") {
+        throw bad("an image must be base64 JPEG, PNG, WebP or GIF.");
+      }
+      if (source.data.length > MAX_IMAGE_BASE64_CHARS) {
+        throw new RelayError(413, "request_too_large", "The image is too large.");
+      }
+      if (source.data.length === 0 || source.data.length % 4 !== 0 || !BASE64.test(source.data)) throw bad("the image data isn't valid base64.");
+      image = { type: "image", source: { type: "base64", media_type: source.media_type, data: source.data } };
+    } else if (block?.type === "text" && !text && typeof block.text === "string") {
+      text = block.text.trim() === "" ? null : { type: "text", text: block.text };
+      if (text === null && !image) throw bad("a text block needs text.");
+    } else {
+      throw bad("only one image followed by one text block is allowed.");
+    }
+  }
+  if (!image) throw bad("blocks are only for sending an image; send plain text otherwise.");
+  return { blocks: [image, ...(text ? [text] : [])], textLength: text ? text.text.length : 0 };
+}
+
 /** Validates and normalises the app's request body. Throws RelayError(400). */
 export function validateChatBody(body) {
   if (!body || typeof body !== "object") throw new RelayError(400, "invalid_request", "Body must be a JSON object.");
@@ -254,7 +310,14 @@ export function validateChatBody(body) {
     throw new RelayError(400, "invalid_request", `messages must contain 1 to ${MAX_MESSAGES} items.`);
   }
   let total = 0;
+  const last = messages.length - 1;
   const clean = messages.map((m, i) => {
+    // Only the newest message, from the user, may carry an image.
+    if (i === last && m?.role === "user" && Array.isArray(m.content)) {
+      const { blocks, textLength } = cleanBlocks(m.content, i);
+      total += textLength;
+      return { role: "user", content: blocks };
+    }
     if (!m || (m.role !== "user" && m.role !== "assistant") || typeof m.content !== "string" || m.content.trim() === "") {
       throw new RelayError(400, "invalid_request", `messages[${i}] needs role user/assistant and non-empty text content.`);
     }
@@ -268,8 +331,11 @@ export function validateChatBody(body) {
   if (body.actions !== undefined && typeof body.actions !== "boolean") {
     throw new RelayError(400, "invalid_request", "actions must be true or false.");
   }
+  if (body.web !== undefined && typeof body.web !== "boolean") {
+    throw new RelayError(400, "invalid_request", "web must be true or false.");
+  }
   // Anything else the app sends (model, tools, max_tokens...) is ignored.
-  return { system: system || undefined, messages: clean, actions: body.actions === true };
+  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true };
 }
 
 export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = {}) {
@@ -373,6 +439,18 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
         throw new RelayError(400, "invalid_request", "Body must be valid JSON.");
       }
       const chat = validateChatBody(body);
+      // Web search costs extra per search, so requests that allow it have their own daily cap.
+      if (chat.web) {
+        const searchLimit = Number(env.DAILY_SEARCH_LIMIT) || DEFAULT_DAILY_SEARCH_LIMIT;
+        if (!(await withinDailyLimit(env.USAGE, "search", uid, searchLimit, now()))) {
+          throw new RelayError(
+            429,
+            "daily_limit",
+            `Today's limit of ${searchLimit} replies with web search is used up. It resets at midnight UTC; until then, turn off web search to keep chatting.`
+          );
+        }
+      }
+      const tools = [...(chat.actions ? PROPOSAL_TOOLS : []), ...(chat.web ? [webSearchTool(env)] : [])];
 
       const upstream = await fetchImpl(ANTHROPIC_URL, {
         method: "POST",
@@ -386,9 +464,9 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
           max_tokens: Number(env.MAX_OUTPUT_TOKENS) || DEFAULT_MAX_OUTPUT_TOKENS,
           ...(chat.system ? { system: chat.system } : {}),
           messages: chat.messages,
-          ...(chat.actions
-            ? { tools: PROPOSAL_TOOLS, tool_choice: { type: "auto", disable_parallel_tool_use: true } }
-            : {}),
+          ...(tools.length ? { tools } : {}),
+          // At most one proposal per reply; only set when the proposal tools are there.
+          ...(chat.actions ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
           stream: true,
         }),
       });

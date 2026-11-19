@@ -22,8 +22,3 @@ updates:
       android-libraries:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-    ignore:
-      # Compose releases from 2026.08 on need Android API 37; the app builds against API 36.
-      # Remove this when the app moves to API 37.
-      - dependency-name: "androidx.compose:compose-bom"
-        versions: [">=2026.08.00"]

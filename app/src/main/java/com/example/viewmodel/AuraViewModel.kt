@@ -180,6 +180,16 @@ class AuraViewModel @JvmOverloads constructor(
 
     // Off by default: replies are read in the user's ElevenLabs voice. The text goes to ElevenLabs
     // through the relay; on any failure Aura says why and uses the phone's voice instead.
+    // Off by default: Claude may search the web for a reply. Its search queries (which it writes,
+    // and which can draw on the conversation) go to a search engine through Anthropic.
+    private val _webSearch = MutableStateFlow(privacyPrefs.getBoolean("web_search_enabled", false))
+    val webSearch: StateFlow<Boolean> = _webSearch.asStateFlow()
+
+    fun setWebSearch(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("web_search_enabled", enabled).apply()
+        _webSearch.value = enabled
+    }
+
     private val _elevenLabsVoice = MutableStateFlow(privacyPrefs.getBoolean("elevenlabs_voice", false))
     val elevenLabsVoice: StateFlow<Boolean> = _elevenLabsVoice.asStateFlow()
 
@@ -385,7 +395,11 @@ class AuraViewModel @JvmOverloads constructor(
     private val _selectedTab = MutableStateFlow(0) // 0: Chat, 1: Memory, 2: Projects, 3: Tasks, 4: Identity
     val selectedTab: StateFlow<Int> = _selectedTab.asStateFlow()
 
-    private val _routingMode = MutableStateFlow(HybridRoutingMode.AUTO_HYBRID)
+    // Remembered across restarts (kept with the other privacy choices, so backups include it).
+    private val _routingMode = MutableStateFlow(
+        runCatching { HybridRoutingMode.valueOf(privacyPrefs.getString("routing_mode", null) ?: "") }
+            .getOrDefault(HybridRoutingMode.AUTO_HYBRID)
+    )
     val routingMode: StateFlow<HybridRoutingMode> = _routingMode.asStateFlow()
 
     private val _activeProject = MutableStateFlow<ProjectEntity?>(null)
@@ -397,6 +411,10 @@ class AuraViewModel @JvmOverloads constructor(
 
     private val _currentStreamingText = MutableStateFlow<String?>(null)
     val currentStreamingText: StateFlow<String?> = _currentStreamingText.asStateFlow()
+
+    /** What Claude is doing while it writes, e.g. searching the web (null when nothing to show). */
+    private val _streamingActivity = MutableStateFlow<String?>(null)
+    val streamingActivity: StateFlow<String?> = _streamingActivity.asStateFlow()
 
     private val _streamingModelUsed = MutableStateFlow<AiModelUsed?>(null)
     val streamingModelUsed: StateFlow<AiModelUsed?> = _streamingModelUsed.asStateFlow()
@@ -542,6 +560,8 @@ class AuraViewModel @JvmOverloads constructor(
         seedInitialDataIfNeeded()
         // An action left EXECUTING means the app was killed mid-run; its writes were rolled back.
         viewModelScope.launch { actionExecutor.recoverInterrupted() }
+        // Images from chats deleted while the app was closed (or before a crash) are removed.
+        deleteUnusedImages()
         // Recently deleted to-dos are kept for 30 days, then removed for good.
         viewModelScope.launch { todoDao.purgeDeletedBefore(TodoRules.purgeCutoff(System.currentTimeMillis())) }
     }
@@ -551,6 +571,7 @@ class AuraViewModel @JvmOverloads constructor(
     }
 
     fun setRoutingMode(mode: HybridRoutingMode) {
+        privacyPrefs.edit().putString("routing_mode", mode.name).apply()
         _routingMode.value = mode
     }
 
@@ -581,6 +602,22 @@ class AuraViewModel @JvmOverloads constructor(
         }
     }
 
+    /** Reads an image the user picked and prepares it on the phone (upright, shrunk, no metadata). */
+    suspend fun prepareImage(uri: android.net.Uri): Result<com.example.data.model.ChatImages.Prepared> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { com.example.data.model.ChatImages.prepare(getApplication(), uri) }
+        }
+
+    /** Deletes stored images that no message refers to any more (after chats are cleared or deleted). */
+    private fun deleteUnusedImages() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val inUse = db.chatMessageDao().imageNamesInUse().toSet()
+                com.example.data.model.ChatImages.deleteUnused(getApplication(), inUse)
+            }
+        }
+    }
+
     fun deleteChatSession(session: ChatSessionEntity) {
         viewModelScope.launch {
             if (_activeSession.value?.id == session.id) cancelSend()
@@ -595,6 +632,7 @@ class AuraViewModel @JvmOverloads constructor(
                 }
                 loadChatMessages()
             }
+            deleteUnusedImages()
         }
     }
 
@@ -634,8 +672,12 @@ class AuraViewModel @JvmOverloads constructor(
         }
     }
 
-    fun sendMessage(text: String) {
-        if (text.isBlank() || _isGenerating.value) return
+    /**
+     * Sends a message. Returns false, and does nothing, if it can't be sent right now (it is blank,
+     * or a reply is still being written), so the caller can keep the text instead of losing it.
+     */
+    fun sendMessage(text: String, image: com.example.data.model.ChatImages.Prepared? = null): Boolean {
+        if ((text.isBlank() && image == null) || _isGenerating.value) return false
         val currentProj = _activeProject.value
         // Set before anything else runs, so a second tap can't send the message twice.
         _isGenerating.value = true
@@ -652,6 +694,7 @@ class AuraViewModel @JvmOverloads constructor(
                 }
                 val currentSessionId = _activeSession.value?.id ?: 1L
                 sessionId = currentSessionId
+                _generatingSessionId.value = currentSessionId
 
                 // Earlier Claude exchanges in this chat, read before the new message is saved.
                 // Only used if this message goes to the cloud.
@@ -672,11 +715,18 @@ class AuraViewModel @JvmOverloads constructor(
                 }
 
                 // 1. Insert User Message
+                // An attached image is stored on the phone with the message, then sent once with it.
+                val imageName = image?.let {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.example.data.model.ChatImages.save(getApplication(), it)
+                    }
+                }
                 val userMsg = ChatMessageEntity(
                     sender = Sender.USER,
-                    text = text,
+                    text = text.trim(),
                     associatedProjectId = currentProj?.id,
-                    sessionId = currentSessionId
+                    sessionId = currentSessionId,
+                    imageName = imageName
                 )
                 chatRepository.insertMessage(userMsg)
 
@@ -703,17 +753,23 @@ class AuraViewModel @JvmOverloads constructor(
                     allowProposals = claudeProposals.value,
                     sharedTodos = sharedTodoList,
                     sharedTodosTotal = sharedTodoTotal,
-                    sharedProject = sharedProject
+                    sharedProject = sharedProject,
+                    allowWebSearch = webSearch.value,
+                    image = image?.jpeg
                 ).collect { state ->
                     when (state) {
                         is HybridAiState.Starting -> {}
                         is HybridAiState.Streaming -> {
                             _currentStreamingText.value = state.text
                             _streamingModelUsed.value = state.modelUsed
+                            // New text means the search is done and Claude is writing again.
+                            _streamingActivity.value = null
                         }
+                        is HybridAiState.Searching -> _streamingActivity.value = "Searching the web for \u201c${state.query}\u201d\u2026"
                         is HybridAiState.Completed -> {
                             _isGenerating.value = false
                             _currentStreamingText.value = null
+                            _streamingActivity.value = null
                             _streamingModelUsed.value = null
 
                             // Save proposed action if any
@@ -742,6 +798,7 @@ class AuraViewModel @JvmOverloads constructor(
                         is HybridAiState.Error -> {
                             _isGenerating.value = false
                             _currentStreamingText.value = null
+                            _streamingActivity.value = null
                             val errorMsg = ChatMessageEntity(
                                 sender = Sender.AI,
                                 text = "Error: ${state.message}",
@@ -779,15 +836,25 @@ class AuraViewModel @JvmOverloads constructor(
                 // (If the chat was cleared or deleted meanwhile, [cancelSend] already did this.)
                 if (sendJob === thisJob) {
                     sendJob = null
+                    _generatingSessionId.value = null
                     _isGenerating.value = false
                     _currentStreamingText.value = null
+                    _streamingActivity.value = null
                     _streamingModelUsed.value = null
                 }
             }
         }
         sendJob = job
         job.start()
+        return true
     }
+
+    /**
+     * The chat the reply in progress belongs to (null when none, or before its chat is known), so
+     * only that chat shows the reply being written when the user looks at another one meanwhile.
+     */
+    private val _generatingSessionId = MutableStateFlow<Long?>(null)
+    val generatingSessionId: StateFlow<Long?> = _generatingSessionId.asStateFlow()
 
     /** The reply being produced, if any. */
     private var sendJob: kotlinx.coroutines.Job? = null
@@ -796,8 +863,10 @@ class AuraViewModel @JvmOverloads constructor(
     private fun cancelSend() {
         sendJob?.cancel()
         sendJob = null
+        _generatingSessionId.value = null
         _isGenerating.value = false
         _currentStreamingText.value = null
+        _streamingActivity.value = null
         _streamingModelUsed.value = null
     }
 
@@ -926,6 +995,7 @@ class AuraViewModel @JvmOverloads constructor(
             todoDao.clearProject(project.id)
             // A later project could reuse the ID; it must not inherit sharing.
             setProjectShared(project.id, false)
+            deleteUnusedImages()
         }
     }
 
@@ -1020,8 +1090,10 @@ class AuraViewModel @JvmOverloads constructor(
             chatRepository.clearProjectChat(proj.id)
         }
         _currentStreamingText.value = null
+        _streamingActivity.value = null
         _isGenerating.value = false
         _chatMessages.value = emptyList()
+        deleteUnusedImages()
     }
 
     fun clearCurrentChat() {

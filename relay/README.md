@@ -24,6 +24,17 @@ With `"actions": true` in the body, the relay adds its own four `propose_*` tool
 (save memory, create project, add milestone, add to-do), one per reply. They only describe a change;
 the app shows it as an approval card. Tools sent by the app are ignored.
 
+The newest user message may instead be a list of blocks: one base64 image (JPEG, PNG, WebP or
+GIF, at most 4,000,000 base64 characters) followed by an optional text block. The relay rebuilds
+the blocks from those fields only; images anywhere else, image URLs and file references are refused.
+
+With `"web": true` (the user's "Let Claude search the web" switch), the relay adds Anthropic's
+web search tool, capped at `WEB_SEARCH_MAX_USES` searches per reply (default 3). Searches run on
+Anthropic's side and are billed per search (about $10 per 1,000). Replies with web search have
+their own daily cap, `DAILY_SEARCH_LIMIT` (default 100 per user), when the daily-cap store is set
+up. Web search must also be allowed for the organization in the Claude Console, or such requests
+fail with an error from the Claude API.
+
 Tests: `cd relay && node --test` (no packages needed).
 
 Deployment is automatic from `main` via `.github/workflows/relay.yml` once these

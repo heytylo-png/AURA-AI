@@ -26,7 +26,9 @@ data class ChatMessageEntity(
     val reasoningExplanation: String? = null,
     val associatedProjectId: Long? = null,
     val proposedActionId: Long? = null, // Link to task action if AI proposed one in this turn
-    val sessionId: Long = 1L
+    val sessionId: Long = 1L,
+    /** An image the user attached, stored on the phone (see [ChatImages]); null when none. */
+    val imageName: String? = null
 ) {
     /**
      * Returns a human-readable timestamp, e.g. "10:45 AM" or "Yesterday, 3:15 PM" or "Oct 24, 10:45 AM".

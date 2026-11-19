@@ -97,6 +97,17 @@ class Audit04Test {
         assertEquals(projectId, back!!.id)
     }
 
+    @Test fun `the routing mode is remembered and a message that can't be sent is refused, not lost`() = runBlocking<Unit> {
+        val first = AuraViewModel(app)
+        assertEquals(com.example.ai.HybridRoutingMode.AUTO_HYBRID, first.routingMode.value)
+        first.setRoutingMode(com.example.ai.HybridRoutingMode.FORCE_LOCAL)
+        assertEquals(com.example.ai.HybridRoutingMode.FORCE_LOCAL, AuraViewModel(app).routingMode.value)
+        first.setRoutingMode(com.example.ai.HybridRoutingMode.AUTO_HYBRID)
+
+        assertEquals(false, first.sendMessage("   "))
+        assertEquals(null, first.generatingSessionId.value)
+    }
+
     @Test fun `A4-04 the helper screens from Compose's tools are closed to other apps`() {
         val pm = app.packageManager
         val info = pm.getPackageInfo(app.packageName, android.content.pm.PackageManager.GET_ACTIVITIES)

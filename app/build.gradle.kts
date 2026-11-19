@@ -10,7 +10,9 @@ plugins {
 
 android {
   namespace = "com.example"
-  compileSdk { version = release(36) { minorApiLevel = 1 } }
+  // Compiled against Android 17 (API 37), which newer libraries require. targetSdk below is what
+  // decides how the app behaves on the phone; it stays at 36 until the app is checked on 37.
+  compileSdk { version = release(37) }
 
   defaultConfig {
     applicationId = "com.aistudio.auraai.qvxmk"

@@ -31,12 +31,22 @@ jobs:
           packages: platform-tools
 
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+
+      # The Gradle version comes from gradle/wrapper/gradle-wrapper.properties, so an update to
+      # it (by hand or by Dependabot) is what CI builds with.
+      - name: Read Gradle version from the wrapper
+        id: gradle-version
+        run: |
+          version="$(sed -n 's#^distributionUrl=.*/gradle-\([0-9][0-9.]*\)-bin\.zip$#\1#p' gradle/wrapper/gradle-wrapper.properties)"
+          test -n "$version" || { echo "::error::No Gradle version found in gradle/wrapper/gradle-wrapper.properties"; exit 1; }
+          echo "Gradle $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
         with:
-          gradle-version: '9.3.1'
+          gradle-version: ${{ steps.gradle-version.outputs.version }}
 
       - name: Run unit tests
         run: gradle --no-daemon :app:testDebugUnitTest

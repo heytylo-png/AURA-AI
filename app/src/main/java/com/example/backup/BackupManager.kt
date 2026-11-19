@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Log
 import com.example.data.local.AppDatabase
 import com.example.data.local.DATABASE_VERSION
+import com.example.data.model.ChatImages
 import org.json.JSONArray
 import org.json.JSONObject
 import android.provider.DocumentsContract
@@ -31,11 +32,12 @@ class BackupManager(private val context: Context) {
     private val app = context.applicationContext
 
     /** A backup that was unlocked and checked, waiting for the user to confirm the restore. */
-    class Staged(val database: File, val settings: String?) {
+    class Staged(val database: File, val settings: String?, val images: File? = null) {
         /** Removes the unlocked copy (the user cancelled, or the restore is done). */
         fun discard() {
             database.delete()
             removeSqliteSideFiles(database)
+            images?.deleteRecursively()
         }
     }
 
@@ -49,6 +51,10 @@ class BackupManager(private val context: Context) {
             BackupCrypto.encryptTo(out, passphrase, DATABASE_VERSION) { zip ->
                 snapshot.inputStream().use { BackupCrypto.putEntry(zip, DB_ENTRY, it) }
                 BackupCrypto.putEntry(zip, PREFS_ENTRY, exportPrefs().toByteArray(Charsets.UTF_8).inputStream())
+                // Images attached to chat messages, one entry each, under their own names.
+                ChatImages.dir(app).listFiles()?.filter { ChatImages.isValidName(it.name) }?.sortedBy { it.name }?.forEach { f ->
+                    f.inputStream().use { BackupCrypto.putEntry(zip, f.name, it) }
+                }
             }
         } finally {
             snapshot.delete()
@@ -99,11 +105,17 @@ class BackupManager(private val context: Context) {
         val temp = File.createTempFile(UNLOCKED_PREFIX, ".db", app.cacheDir)
         var hasDatabase = false
         var settings: String? = null
+        val images = File(app.cacheDir, "${UNLOCKED_PREFIX}_images_${System.nanoTime()}")
         try {
             val header = BackupCrypto.decryptTo(input, passphrase) { name, data ->
                 when (name) {
                     DB_ENTRY -> { temp.outputStream().use { data.copyTo(it) }; hasDatabase = true }
                     PREFS_ENTRY -> settings = String(readSmall(data), Charsets.UTF_8)
+                    // Images: only names Aura itself gives them, each of a sensible size.
+                    else -> if (ChatImages.isValidName(name)) {
+                        images.mkdirs()
+                        File(images, name).outputStream().use { out -> copyAtMost(data, out, MAX_IMAGE_BYTES) }
+                    }
                 }
             }
             if (!hasDatabase) throw BackupCrypto.BackupException("This backup has no data in it.")
@@ -123,11 +135,41 @@ class BackupManager(private val context: Context) {
             }
             // Opening the copy to check it can leave SQLite's helper files next to it.
             removeSqliteSideFiles(temp)
-            return summary to Staged(temp, settings)
+            return summary to Staged(temp, settings, images.takeIf { it.isDirectory })
         } catch (e: Throwable) {
             temp.delete()
             removeSqliteSideFiles(temp)
+            images.deleteRecursively()
             throw if (e is android.database.sqlite.SQLiteException) BackupCrypto.BackupException("The data inside this backup is damaged.", e) else e
+        }
+    }
+
+    /**
+     * Puts the backup's images in place of the current ones. The current ones are kept as a safety
+     * copy, like the database (see [removeOldSafetyCopy]).
+     */
+    private fun restoreImages(staged: File?) {
+        val current = ChatImages.dir(app)
+        val previous = File(app.filesDir, IMAGES_BEFORE_RESTORE)
+        previous.deleteRecursively()
+        if (!current.renameTo(previous)) current.deleteRecursively()
+        previous.setLastModified(System.currentTimeMillis())
+        // `current` no longer exists here; the backup's images take its place.
+        if (staged != null && staged.isDirectory && !staged.renameTo(current)) {
+            staged.copyRecursively(current, overwrite = true)
+        }
+        current.mkdirs()
+    }
+
+    private fun copyAtMost(data: InputStream, out: OutputStream, max: Long) {
+        val buffer = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val n = data.read(buffer)
+            if (n < 0) break
+            total += n
+            if (total > max) throw BackupCrypto.BackupException("This backup file is damaged.")
+            out.write(buffer, 0, n)
         }
     }
 
@@ -156,7 +198,9 @@ class BackupManager(private val context: Context) {
         staged.delete()
         // Usually a rename within Aura's storage; copy if the cache is on another volume.
         if (!backup.database.renameTo(staged)) backup.database.copyTo(staged, overwrite = true)
-        backup.discard()
+        // The unlocked copy of the database is no longer needed; the staged images still are.
+        backup.database.delete()
+        removeSqliteSideFiles(backup.database)
 
         AppDatabase.closeDatabase()
         // Keep the current data as a safety copy for a while (see [removeOldSafetyCopy]).
@@ -177,6 +221,8 @@ class BackupManager(private val context: Context) {
             throw BackupCrypto.BackupException("Couldn't put the backup in place; your data was left as it was.")
         }
         backup.settings?.let { importPrefs(it) }
+        restoreImages(backup.images)
+        backup.discard()
     }
 
     /** A consistent copy of the live database file. */
@@ -261,6 +307,8 @@ class BackupManager(private val context: Context) {
         private const val REMINDER_PREFS = "aura_reminders"
         private const val UNLOCKED_PREFIX = "aura_restore_check"
         private const val MAX_SETTINGS_BYTES = 1024 * 1024
+        private const val MAX_IMAGE_BYTES = 20L * 1024 * 1024
+        private const val IMAGES_BEFORE_RESTORE = "chat_images.before-restore"
         private const val PENDING_SAVE_PREFIX = "aura_backup_ready"
 
         /** Removes encrypted backups left in the cache by a save that was interrupted. */
@@ -277,7 +325,7 @@ class BackupManager(private val context: Context) {
          * closed while the "Replace the data on this phone?" question was showing.
          */
         fun clearUnlockedCopies(context: Context) {
-            context.cacheDir.listFiles { f -> f.name.startsWith(UNLOCKED_PREFIX) }?.forEach { it.delete() }
+            context.cacheDir.listFiles { f -> f.name.startsWith(UNLOCKED_PREFIX) }?.forEach { it.deleteRecursively() }
         }
         val PREFS_FILES = listOf("aura_identity_prefs", "aura_memory_prefs", "aura_privacy_prefs", REMINDER_PREFS)
 
@@ -312,6 +360,7 @@ class BackupManager(private val context: Context) {
             previous.delete()
             File(previous.path + "-wal").delete()
             File(previous.path + "-shm").delete()
+            File(context.filesDir, IMAGES_BEFORE_RESTORE).deleteRecursively()
         }
 
         /** Relaunches Aura so every screen reopens the restored data. */

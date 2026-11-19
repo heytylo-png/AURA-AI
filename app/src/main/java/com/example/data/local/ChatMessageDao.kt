@@ -37,6 +37,10 @@ interface ChatMessageDao {
     @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun clearSessionChat(sessionId: Long)
 
+    /** File names of every image still attached to a message. */
+    @Query("SELECT imageName FROM chat_messages WHERE imageName IS NOT NULL")
+    suspend fun imageNamesInUse(): List<String>
+
     /** Messages of every chat that belongs to a project (used when the project is deleted). */
     @Query("DELETE FROM chat_messages WHERE sessionId IN (SELECT id FROM chat_sessions WHERE associatedProjectId = :projectId)")
     suspend fun deleteForProjectChats(projectId: Long)

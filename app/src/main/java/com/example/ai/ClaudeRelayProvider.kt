@@ -66,11 +66,14 @@ class ClaudeRelayProvider(
                     today = if (request.allowProposals || request.openTodos.isNotEmpty()) com.example.data.model.TodoRules.formatDue(com.example.data.model.TodoRules.today()) else null,
                     openTodos = request.openTodos,
                     openTodosTotal = request.openTodosTotal,
-                    sharedProject = request.sharedProject
+                    sharedProject = request.sharedProject,
+                    webSearch = request.allowWebSearch,
+                    imageAttached = request.image != null
                 )
             )
             .put("messages", messagesJson(request))
             .apply { if (request.allowProposals) put("actions", true) }
+            .apply { if (request.allowWebSearch) put("web", true) }
             .toString()
 
         val startedAt = clock()
@@ -115,6 +118,12 @@ class ClaudeRelayProvider(
             val toolInput = StringBuilder()
             var toolCall: ToolCall? = null
             var stopReason: String? = null
+            // Web search: the queries Claude ran, the pages it cited, and the block being read.
+            val searches = mutableListOf<String>()
+            val sources = LinkedHashMap<String, WebSource>()
+            var searchIndex: Int? = null
+            val searchInput = StringBuilder()
+            var afterNonText = false
             while (true) {
                 currentCoroutineContext().ensureActive()
                 val line = try {
@@ -132,6 +141,21 @@ class ClaudeRelayProvider(
                         text.append(event.text)
                         emit(AiProviderEvent.Content(text.toString()))
                     }
+                    is SseEvent.TextStart -> {
+                        // Text written after a search starts a new paragraph ("I'll look that up." /
+                        // the answer). Text blocks split only by citations join as they are.
+                        if (afterNonText && text.isNotEmpty() && !text.last().isWhitespace()) text.append("\n\n")
+                        afterNonText = false
+                    }
+                    is SseEvent.OtherBlockStart -> afterNonText = true
+                    is SseEvent.SearchStart -> {
+                        afterNonText = true
+                        searchIndex = event.index
+                        searchInput.setLength(0)
+                    }
+                    is SseEvent.Citation -> if (event.url.startsWith("https://") || event.url.startsWith("http://")) {
+                        sources.putIfAbsent(event.url, WebSource(event.url, event.title.ifBlank { event.url }))
+                    }
                     is SseEvent.Error -> {
                         emit(AiProviderEvent.Error("Claude stopped with an error: ${event.message}"))
                         return@flow
@@ -140,20 +164,41 @@ class ClaudeRelayProvider(
                         toolIndex = event.index
                         toolName = event.name
                     }
-                    is SseEvent.ToolInput -> if (event.index == toolIndex) toolInput.append(event.partialJson)
-                    is SseEvent.BlockStop -> if (event.index == toolIndex) {
-                        toolCall = ToolCall(toolName.orEmpty(), toolInput.toString())
-                        toolIndex = null
+                    is SseEvent.ToolInput -> when (event.index) {
+                        toolIndex -> toolInput.append(event.partialJson)
+                        searchIndex -> searchInput.append(event.partialJson)
+                        else -> Unit
                     }
-                    is SseEvent.StopReason -> stopReason = event.reason
+                    is SseEvent.BlockStop -> when (event.index) {
+                        toolIndex -> {
+                            toolCall = ToolCall(toolName.orEmpty(), toolInput.toString())
+                            toolIndex = null
+                        }
+                        searchIndex -> {
+                            val query = runCatching { JSONObject(searchInput.toString()).optString("query") }.getOrNull()
+                                ?.trim()?.takeIf { it.isNotEmpty() }
+                            if (query != null) {
+                                searches += query.take(MAX_QUERY_CHARS)
+                                emit(AiProviderEvent.Searching(query.take(MAX_QUERY_CHARS)))
+                            }
+                            searchIndex = null
+                        }
+                        else -> Unit
+                    }
+                    is SseEvent.StopReason -> if (event.reason != null) stopReason = event.reason
                     SseEvent.Stop -> {
-                        if (text.isBlank() && toolCall == null) {
+                        if (text.isBlank() && toolCall == null && stopReason == "pause_turn") {
+                            emit(AiProviderEvent.Error("The web search took too long and Claude didn't get to write an answer. Try asking again, perhaps more specifically."))
+                        } else if (text.isBlank() && toolCall == null) {
                             emit(AiProviderEvent.Error("Claude returned an empty reply."))
                         } else {
                             emit(
                                 AiProviderEvent.Completed(
                                     text.toString(), clock() - startedAt, toolCall = toolCall,
-                                    cutOff = stopReason == "max_tokens"
+                                    cutOff = stopReason == "max_tokens",
+                                    webSearches = searches.toList(),
+                                    sources = sources.values.toList(),
+                                    searchCutShort = stopReason == "pause_turn"
                                 )
                             )
                         }
@@ -193,13 +238,24 @@ class ClaudeRelayProvider(
         data class ToolStart(val index: Int, val name: String) : SseEvent
         data class ToolInput(val index: Int, val partialJson: String) : SseEvent
         data class BlockStop(val index: Int) : SseEvent
-        /** Why the model stopped ("end_turn", "tool_use", "max_tokens"...), sent just before [Stop]. */
-        data class StopReason(val reason: String) : SseEvent
+        /** A text block starts (a reply can have several, e.g. before and after a web search). */
+        data class TextStart(val index: Int) : SseEvent
+        /** Claude starts a web search; its query arrives as [ToolInput] for the same index. */
+        data class SearchStart(val index: Int) : SseEvent
+        /** Any other non-text block (search results, filtering code) starts. */
+        data class OtherBlockStart(val index: Int) : SseEvent
+        /** Claude cited a web page in the text it is writing. */
+        data class Citation(val url: String, val title: String) : SseEvent
+        /** Why the model stopped ("end_turn", "tool_use", "max_tokens", "pause_turn"...), sent just before [Stop]. */
+        data class StopReason(val reason: String?) : SseEvent
         data object Stop : SseEvent
     }
 
     companion object {
         private val JSON = "application/json".toMediaType()
+
+        /** Longest search query kept for showing to the user. */
+        const val MAX_QUERY_CHARS = 200
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -210,8 +266,23 @@ class ClaudeRelayProvider(
         /** Earlier turns, oldest first, then the new message. */
         fun messagesJson(request: AiProviderRequest): JSONArray {
             val array = JSONArray()
-            (request.history + ChatTurn(ChatTurn.Role.USER, request.prompt)).forEach { turn ->
+            request.history.forEach { turn ->
                 array.put(JSONObject().put("role", turn.role.wire).put("content", turn.text))
+            }
+            val image = request.image
+            if (image == null) {
+                array.put(JSONObject().put("role", "user").put("content", request.prompt))
+            } else {
+                // The image first, then the question about it (if any).
+                val blocks = JSONArray().put(
+                    JSONObject().put("type", "image").put(
+                        "source",
+                        JSONObject().put("type", "base64").put("media_type", "image/jpeg")
+                            .put("data", android.util.Base64.encodeToString(image, android.util.Base64.NO_WRAP))
+                    )
+                )
+                if (request.prompt.isNotBlank()) blocks.put(JSONObject().put("type", "text").put("text", request.prompt))
+                array.put(JSONObject().put("role", "user").put("content", blocks))
             }
             return array
         }
@@ -241,20 +312,31 @@ class ClaudeRelayProvider(
             val obj = runCatching { JSONObject(line.removePrefix("data:").trim()) }.getOrNull() ?: return null
             val index = obj.optInt("index", -1)
             return when (obj.optString("type")) {
-                "content_block_start" -> obj.optJSONObject("content_block")
-                    ?.takeIf { it.optString("type") == "tool_use" }
-                    ?.let { SseEvent.ToolStart(index, it.optString("name")) }
+                "content_block_start" -> obj.optJSONObject("content_block")?.let { block ->
+                    when (block.optString("type")) {
+                        "tool_use" -> SseEvent.ToolStart(index, block.optString("name"))
+                        "text" -> SseEvent.TextStart(index)
+                        "server_tool_use" ->
+                            if (block.optString("name") == "web_search") SseEvent.SearchStart(index) else SseEvent.OtherBlockStart(index)
+                        "thinking", "redacted_thinking" -> null
+                        else -> SseEvent.OtherBlockStart(index)
+                    }
+                }
                 "content_block_delta" -> {
                     val delta = obj.optJSONObject("delta")
                     when (delta?.optString("type")) {
                         "text_delta" -> SseEvent.TextDelta(delta.optString("text"))
                         "input_json_delta" -> SseEvent.ToolInput(index, delta.optString("partial_json"))
+                        "citations_delta" -> delta.optJSONObject("citation")
+                            ?.takeIf { it.optString("type") == "web_search_result_location" }
+                            ?.let { c -> SseEvent.Citation(c.optString("url"), if (c.isNull("title")) "" else c.optString("title").trim()) }
                         else -> null
                     }
                 }
                 "content_block_stop" -> SseEvent.BlockStop(index)
-                "message_delta" -> obj.optJSONObject("delta")?.optString("stop_reason")
-                    ?.takeIf { it.isNotBlank() && it != "null" }?.let { SseEvent.StopReason(it) }
+                "message_delta" -> obj.optJSONObject("delta")
+                    ?.takeUnless { it.isNull("stop_reason") }?.optString("stop_reason")
+                    ?.takeIf { it.isNotBlank() }?.let { SseEvent.StopReason(it) }
                 "message_stop" -> SseEvent.Stop
                 "error" -> SseEvent.Error(obj.optJSONObject("error")?.optString("message")?.ifBlank { null } ?: "unknown error")
                 else -> null
