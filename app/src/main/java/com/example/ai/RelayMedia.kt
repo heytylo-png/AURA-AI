@@ -14,6 +14,21 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
 
+/** Claude asked to keep the newest message's attachments in the library under [label]. */
+data class LibrarySave(val label: String, val reference: Boolean) {
+    companion object {
+        const val TOOL_NAME = "save_to_library"
+
+        fun fromToolCall(call: ToolCall): LibrarySave? {
+            if (call.name != TOOL_NAME) return null
+            val input = runCatching { JSONObject(call.inputJson) }.getOrNull() ?: return null
+            val label = input.optString("label").trim().take(com.example.data.model.MediaLibrary.MAX_LABEL)
+                .takeIf { it.isNotEmpty() } ?: return null
+            return LibrarySave(label, input.optBoolean("reference", true))
+        }
+    }
+}
+
 /** An image or video Claude asked for (with the generate_image / generate_video tools). */
 sealed interface MediaRequest {
     val prompt: String

@@ -453,6 +453,32 @@ class AuraViewModel @JvmOverloads constructor(
         }
     }
 
+    /** Claude saved a message's attachments to the library (the user asked for it in that message). */
+    private fun saveAttachmentsToLibrary(names: List<String>, save: com.example.ai.LibrarySave) {
+        viewModelScope.launch {
+            val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val app = getApplication<Application>()
+                names.mapNotNull { name ->
+                    runCatching {
+                        val source = com.example.data.model.MediaLibrary.find(app, name) ?: return@runCatching null
+                        val copy = com.example.data.model.MediaLibrary.copyIn(app, source)
+                        val kind = com.example.data.model.MediaLibrary.kindFor(copy)
+                        db.savedMediaDao().insert(
+                            com.example.data.model.SavedMediaEntity(
+                                fileName = copy, kind = kind, label = save.label,
+                                isReference = save.reference && kind != com.example.data.model.MediaLibrary.KIND_VIDEO
+                            )
+                        )
+                    }.getOrNull()
+                }
+            }
+            voiceNotice(
+                if (saved.isEmpty()) "Nothing could be saved to your library."
+                else "Saved ${com.example.data.model.Attachments.describe(names)} to your library as \u201c${save.label}\u201d."
+            )
+        }
+    }
+
     fun updateLibraryItem(item: com.example.data.model.SavedMediaEntity) {
         viewModelScope.launch {
             db.savedMediaDao().update(
@@ -1183,6 +1209,7 @@ class AuraViewModel @JvmOverloads constructor(
                     allowWebSearch = webSearch.value,
                     allowLinkReading = linkReading.value,
                     allowMedia = mediaGeneration.value,
+                    allowLibrarySave = imageNames.isNotEmpty(),
                     images = images.map { it.jpeg } + video?.frames.orEmpty().map { it.jpeg },
                     videoFrames = video?.frames?.size ?: 0,
                     attachmentNote = video?.let {
@@ -1224,6 +1251,7 @@ class AuraViewModel @JvmOverloads constructor(
                             )
                             chatRepository.insertMessage(aiMsg)
                             state.mediaRequest?.let { onMediaRequested(it, currentSessionId, currentProj?.id, images.firstOrNull()?.jpeg) }
+                            state.librarySave?.let { saveAttachmentsToLibrary(imageNames, it) }
 
                             // If auto-speak enabled, speak the answer
                             if (_identity.value.autoSpeakResponses) {

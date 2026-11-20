@@ -73,7 +73,8 @@ class ClaudeRelayProvider(
                     webSearch = request.allowWebSearch,
                     imagesAttached = request.images.size,
                     linkReading = readLinks,
-                    media = request.allowMedia
+                    media = request.allowMedia,
+                    librarySave = request.allowLibrarySave
                 )
             )
             .put("messages", messagesJson(request))
@@ -81,6 +82,7 @@ class ClaudeRelayProvider(
             .apply { if (request.allowWebSearch) put("web", true) }
             .apply { if (readLinks) put("fetch", true) }
             .apply { if (request.allowMedia) put("media", true) }
+            .apply { if (request.allowLibrarySave) put("library", true) }
             .toString()
 
         val startedAt = clock()

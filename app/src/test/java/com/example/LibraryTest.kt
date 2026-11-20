@@ -261,4 +261,56 @@ class LibraryTest {
         ReminderPrefs(app).customSound = null
         ReminderPrefs(app).channelId = Reminders.CHANNEL_ID
     }
+
+    @Test fun `Claude can save the attached pictures to the library under a name, and nothing else`() {
+        assertEquals(
+            com.example.ai.LibrarySave("star", true),
+            com.example.ai.LibrarySave.fromToolCall(ToolCall("save_to_library", """{"label":" star ","reference":true}"""))
+        )
+        assertNull(com.example.ai.LibrarySave.fromToolCall(ToolCall("save_to_library", """{"label":"  "}""")))
+        assertNull(com.example.ai.LibrarySave.fromToolCall(ToolCall("generate_image", """{"label":"star"}""")))
+
+        val provider = object : AiProvider {
+            override val providerId = "fake"
+            override val capabilities = AiProviderCapabilities(streaming = true, supportsPersonalContext = true, supportsOffline = false)
+            override fun generateStream(request: AiProviderRequest): Flow<AiProviderEvent> = flowOf(
+                AiProviderEvent.Completed("", 5, toolCall = ToolCall("save_to_library", """{"label":"star","reference":true}"""))
+            )
+        }
+        fun ask(allow: Boolean) = runBlocking {
+            HybridAiEngine(app, cloudEngine = provider, onlineStatusOverride = { true }).processHybridRequest(
+                prompt = "save these as star", mode = HybridRoutingMode.FORCE_CLOUD, identity = AiIdentityConfig(),
+                activeMemories = emptyList(), projects = emptyList(), allowCloudRequest = true, allowProposals = true,
+                images = listOf(byteArrayOf(1)), allowLibrarySave = allow
+            ).toList().last() as HybridAiState.Completed
+        }
+        val saved = ask(true)
+        assertEquals(com.example.ai.LibrarySave("star", true), saved.librarySave)
+        assertNull("not turned into a proposal card", saved.proposedAction)
+        assertEquals("Saved to your library as \u201cstar\u201d.", saved.fullText)
+        assertNull("without attachments, nothing is saved", ask(false).librarySave)
+    }
+
+    @Test fun `the app offers the save tool only when something is attached`() = runBlocking<Unit> {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val stream = MockResponse().setHeader("content-type", "text/event-stream")
+                .setBody("""data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}""" + "\n\n" + """data: {"type":"message_stop"}""" + "\n\n")
+            server.enqueue(stream)
+            server.enqueue(stream)
+            val provider = ClaudeRelayProvider(server.url("/").toString(), tokens)
+            val request = AiProviderRequest(prompt = "save these as star", identity = AiIdentityConfig(), images = listOf(picture(4, 4)))
+            provider.generateStream(request.copy(allowLibrarySave = true)).toList()
+            provider.generateStream(request.copy(images = emptyList())).toList()
+            val on = JSONObject(server.takeRequest().body.readUtf8())
+            val off = JSONObject(server.takeRequest().body.readUtf8())
+            assertEquals(true, on.getBoolean("library"))
+            assertTrue(on.getString("system").contains("save_to_library"))
+            assertFalse(off.has("library"))
+            assertTrue(off.getString("system").contains("tap Library"))
+        } finally {
+            server.shutdown()
+        }
+    }
 }
