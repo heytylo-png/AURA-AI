@@ -25,8 +25,12 @@ data class AiProviderRequest(
     val allowWebSearch: Boolean = false,
     /** The user's "Let Claude open links" switch: Claude may open links that appear in this conversation. */
     val allowLinkReading: Boolean = false,
-    /** Images attached to [prompt]: JPEGs prepared on the phone (see ChatImages). */
+    /** Images attached to [prompt]: JPEGs prepared on the phone (see ChatImages), then any video's still frames. */
     val images: List<ByteArray> = emptyList(),
+    /** How many of [images], at the end, are still frames from a video (see ChatVideos). */
+    val videoFrames: Int = 0,
+    /** Said to Claude before [prompt], about what is attached (when the video's frames were taken). */
+    val attachmentNote: String? = null,
     /** Open to-dos the user chose to share: titles and due dates only (see [CloudTodos]). */
     val openTodos: List<CloudTodo> = emptyList(),
     /** How many open to-dos the user has in total, so Claude knows whether [openTodos] is the whole list. */

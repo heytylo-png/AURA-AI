@@ -219,7 +219,7 @@ class ImagesTest {
                 ChatMessageEntity(sender = Sender.AI, text = "The left one.", modelUsed = AiModelUsed.CLOUD, timestamp = 2)
             )
         )
-        assertEquals("Compare\n\n${CloudHistory.imagesNotResent(2)}", history.first().text)
+        assertEquals("Compare\n\n${CloudHistory.notResent(names)}", history.first().text)
         assertTrue(history.first().text.contains("2 images"))
 
         val prompt = com.example.ai.AuraPrompt.system(AiIdentityConfig(), imagesAttached = 2)

@@ -113,7 +113,7 @@ class DefaultChatRepository @JvmOverloads constructor(
                     session.copy(
                         title = updatedTitle,
                         lastMessageSnippet = message.text.take(65).trim().ifEmpty {
-                            when (val n = message.attachmentNames.size) { 0 -> ""; 1 -> "Image"; else -> "$n images" }
+                            com.example.data.model.Attachments.describe(message.attachmentNames).replaceFirstChar { it.uppercase() }
                         },
                         lastModifiedAt = message.timestamp
                     )

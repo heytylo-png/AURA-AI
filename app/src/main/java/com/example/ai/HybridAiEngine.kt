@@ -90,7 +90,11 @@ class HybridAiEngine(
         /** The user's "Let Claude open links" switch. */
         allowLinkReading: Boolean = false,
         /** Images attached to [prompt] (JPEGs, prepared on the phone). Only Claude can read them. */
-        images: List<ByteArray> = emptyList()
+        images: List<ByteArray> = emptyList(),
+        /** How many of [images], at the end, are still frames from a video. */
+        videoFrames: Int = 0,
+        /** Said to Claude before [prompt], about the attachments. */
+        attachmentNote: String? = null
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
@@ -100,16 +104,16 @@ class HybridAiEngine(
         if (images.isNotEmpty()) {
             val blocked = when {
                 !allowCloudRequest -> notice(
-                    "Nothing was sent: only Claude can read images, and cloud chat is off. Turn on \"Cloud chat\" " +
-                        "in Settings \u2192 Cloud AI to ask about this image.",
+                    "Nothing was sent: only Claude can see pictures and videos, and cloud chat is off. Turn on \"Cloud chat\" " +
+                        "in Settings \u2192 Cloud AI to ask about what you attached.",
                     "Image attached with cloud chat off; nothing was sent."
                 )
                 mode == HybridRoutingMode.FORCE_LOCAL -> notice(
-                    "Nothing was sent: Local mode can't read images. Switch to Auto or Cloud to ask Claude about this image.",
+                    "Nothing was sent: Local mode can't see pictures or videos. Switch to Auto or Cloud to ask Claude about what you attached.",
                     "Image attached in Local mode; nothing was sent."
                 )
                 !online -> notice(
-                    "You're offline, and only Claude can read images. Nothing was sent; try again when you're connected.",
+                    "You're offline, and only Claude can see pictures and videos. Nothing was sent; try again when you're connected.",
                     "Image attached while offline; nothing was sent."
                 )
                 else -> null
@@ -185,7 +189,9 @@ class HybridAiEngine(
             allowProposals = allowProposals,
             allowWebSearch = allowWebSearch,
             allowLinkReading = allowLinkReading,
-            images = images
+            images = images,
+            videoFrames = videoFrames,
+            attachmentNote = attachmentNote
         ).forCloud(sharePersonalContext).copy(
             openTodos = sharedTodos.take(CloudTodos.MAX),
             openTodosTotal = if (sharedTodos.isEmpty()) 0 else maxOf(sharedTodosTotal, sharedTodos.take(CloudTodos.MAX).size),
@@ -297,10 +303,13 @@ class HybridAiEngine(
                 "this message and the last $earlier earlier Claude exchange${if (earlier == 1) "" else "s"} in this chat",
             "the assistant's name and personality"
         )
-        when (sent.images.size) {
+        when (val pictures = sent.images.size - sent.videoFrames) {
             0 -> {}
             1 -> parts += "the image you attached (shrunk, with its location and other photo data removed)"
-            else -> parts += "the ${sent.images.size} images you attached (shrunk, with their location and other photo data removed)"
+            else -> parts += "the $pictures images you attached (shrunk, with their location and other photo data removed)"
+        }
+        if (sent.videoFrames > 0) {
+            parts += "${plural(sent.videoFrames, "still frame")} from your video (no sound; the video itself stayed on this phone)"
         }
         if (sent.allowPersonalContext) {
             val n = sent.activeMemories.size

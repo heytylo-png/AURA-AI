@@ -312,7 +312,9 @@ class ClaudeRelayProvider(
                         )
                     )
                 }
-                if (request.prompt.isNotBlank()) blocks.put(JSONObject().put("type", "text").put("text", request.prompt))
+                val text = listOfNotNull(request.attachmentNote?.takeIf { it.isNotBlank() }, request.prompt.takeIf { it.isNotBlank() })
+                    .joinToString("\n\n")
+                if (text.isNotEmpty()) blocks.put(JSONObject().put("type", "text").put("text", text))
                 array.put(JSONObject().put("role", "user").put("content", blocks))
             }
             return array

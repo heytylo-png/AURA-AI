@@ -618,6 +618,16 @@ class AuraViewModel @JvmOverloads constructor(
             runCatching { com.example.data.model.ChatImages.prepare(getApplication(), uri) }
         }
 
+    /** Copies a video the user picked into Aura's storage and takes its still frames, on the phone. */
+    suspend fun prepareVideo(uri: android.net.Uri): Result<com.example.data.model.ChatVideos.Prepared> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { com.example.data.model.ChatVideos.prepare(getApplication(), uri) }
+        }
+
+    /** Whether a picked file is a video (otherwise it's treated as an image). */
+    fun isVideo(uri: android.net.Uri): Boolean =
+        com.example.data.model.ChatVideos.isVideoType(getApplication<Application>().contentResolver.getType(uri))
+
     /** Deletes stored images that no message refers to any more (after chats are cleared or deleted). */
     private fun deleteUnusedImages() {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -625,6 +635,7 @@ class AuraViewModel @JvmOverloads constructor(
                 val inUse = db.chatMessageDao().imageNamesInUse()
                     .flatMap { com.example.data.model.Attachments.names(it) }.toSet()
                 com.example.data.model.ChatImages.deleteUnused(getApplication(), inUse)
+                com.example.data.model.ChatVideos.deleteUnused(getApplication(), inUse)
             }
         }
     }
@@ -687,8 +698,12 @@ class AuraViewModel @JvmOverloads constructor(
      * Sends a message. Returns false, and does nothing, if it can't be sent right now (it is blank,
      * or a reply is still being written), so the caller can keep the text instead of losing it.
      */
-    fun sendMessage(text: String, images: List<com.example.data.model.ChatImages.Prepared> = emptyList()): Boolean {
-        if ((text.isBlank() && images.isEmpty()) || _isGenerating.value) return false
+    fun sendMessage(
+        text: String,
+        images: List<com.example.data.model.ChatImages.Prepared> = emptyList(),
+        video: com.example.data.model.ChatVideos.Prepared? = null
+    ): Boolean {
+        if ((text.isBlank() && images.isEmpty() && video == null) || _isGenerating.value) return false
         val currentProj = _activeProject.value
         // Set before anything else runs, so a second tap can't send the message twice.
         _isGenerating.value = true
@@ -726,9 +741,11 @@ class AuraViewModel @JvmOverloads constructor(
                 }
 
                 // 1. Insert User Message
-                // Attached images are stored on the phone with the message, then sent once with it.
+                // Attached images and video are stored on the phone with the message, then sent once
+                // with it (the video as still frames).
                 val imageNames = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    images.map { com.example.data.model.ChatImages.save(getApplication(), it) }
+                    images.map { com.example.data.model.ChatImages.save(getApplication(), it) } +
+                        listOfNotNull(video?.let { com.example.data.model.ChatVideos.save(getApplication(), it) })
                 }
                 val userMsg = ChatMessageEntity(
                     sender = Sender.USER,
@@ -765,7 +782,11 @@ class AuraViewModel @JvmOverloads constructor(
                     sharedProject = sharedProject,
                     allowWebSearch = webSearch.value,
                     allowLinkReading = linkReading.value,
-                    images = images.map { it.jpeg }
+                    images = images.map { it.jpeg } + video?.frames.orEmpty().map { it.jpeg },
+                    videoFrames = video?.frames?.size ?: 0,
+                    attachmentNote = video?.let {
+                        com.example.data.model.ChatVideos.noteForClaude(it.durationMs, it.frames, picturesBefore = images.size)
+                    }
                 ).collect { state ->
                     when (state) {
                         is HybridAiState.Starting -> {}

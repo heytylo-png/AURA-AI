@@ -39,6 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
@@ -167,28 +168,38 @@ fun ChatScreen(viewModel: AuraViewModel) {
         )
     }
 
-    // Images picked to send with the next message (prepared on the phone), in the order picked.
+    // Images and a video picked to send with the next message (prepared on the phone), in the order picked.
     var pendingImages by remember { mutableStateOf<List<com.example.data.model.ChatImages.Prepared>>(emptyList()) }
+    var pendingVideo by remember { mutableStateOf<com.example.data.model.ChatVideos.Prepared?>(null) }
     var preparingImage by remember { mutableStateOf(false) }
     val roomForImages = com.example.data.model.Attachments.MAX_PICTURES - pendingImages.size
+    val roomForVideo = pendingVideo == null
     // Android's photo picker: shows only what the user picks, so Aura needs no storage permission.
     // It allows picking several at once; the limit is given when it opens.
-    val pickImages = rememberLauncherForActivityResult(PickImagesUpTo()) { uris ->
+    val pickMedia = rememberLauncherForActivityResult(PickMediaUpTo()) { uris ->
         if (uris.isNotEmpty()) {
             preparingImage = true
             coroutineScope.launch {
-                val room = com.example.data.model.Attachments.MAX_PICTURES - pendingImages.size
-                val failures = mutableListOf<String>()
-                for (uri in uris.take(room.coerceAtLeast(0))) {
-                    viewModel.prepareImage(uri)
-                        .onSuccess { pendingImages = pendingImages + it }
-                        .onFailure { failures += it.message ?: "An image couldn't be read." }
+                val notices = mutableListOf<String>()
+                var leftOut = 0
+                for (uri in uris) {
+                    if (viewModel.isVideo(uri)) {
+                        if (pendingVideo != null) { leftOut++; continue }
+                        viewModel.prepareVideo(uri)
+                            .onSuccess { pendingVideo = it }
+                            .onFailure { notices += it.message ?: "The video couldn't be read." }
+                    } else {
+                        if (pendingImages.size >= com.example.data.model.Attachments.MAX_PICTURES) { leftOut++; continue }
+                        viewModel.prepareImage(uri)
+                            .onSuccess { pendingImages = pendingImages + it }
+                            .onFailure { notices += it.message ?: "An image couldn't be read." }
+                    }
                 }
                 when {
-                    failures.size == 1 -> viewModel.voiceNotice(failures.first())
-                    failures.size > 1 -> viewModel.voiceNotice("${failures.size} of the images couldn't be read.")
-                    uris.size > room -> viewModel.voiceNotice(
-                        "Up to ${com.example.data.model.Attachments.MAX_PICTURES} images go with one message; the rest were left out."
+                    notices.size == 1 -> viewModel.voiceNotice(notices.first())
+                    notices.size > 1 -> viewModel.voiceNotice("${notices.size} of the files couldn't be read.")
+                    leftOut > 0 -> viewModel.voiceNotice(
+                        "One message can have up to ${com.example.data.model.Attachments.MAX_PICTURES} images and one video; the rest were left out."
                     )
                 }
                 preparingImage = false
@@ -473,8 +484,8 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     )
                 }
 
-                // The images waiting to be sent, each with a way to take it off.
-                if (pendingImages.isNotEmpty()) {
+                // The images and video waiting to be sent, each with a way to take it off.
+                if (pendingImages.isNotEmpty() || pendingVideo != null) {
                     Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -487,10 +498,12 @@ fun ChatScreen(viewModel: AuraViewModel) {
                                     onRemove = { pendingImages = pendingImages.filterIndexed { i, _ -> i != index } }
                                 )
                             }
+                            pendingVideo?.let { video ->
+                                PendingVideo(video, onRemove = { video.discard(); pendingVideo = null })
+                            }
                         }
                         Text(
-                            text = if (pendingImages.size == 1) "Goes to Claude with your message. Location and other photo data are removed."
-                            else "${pendingImages.size} images go to Claude with your message. Location and other photo data are removed.",
+                            text = pendingCaption(pendingImages.size, pendingVideo),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(start = 4.dp, top = 4.dp)
@@ -512,14 +525,14 @@ fun ChatScreen(viewModel: AuraViewModel) {
                 ) {
                     IconButton(
                         onClick = {
-                            pickImages.launch(roomForImages)
+                            pickMedia.launch(PickMedia(maxItems = roomForImages + (if (roomForVideo) 1 else 0), videos = roomForVideo, images = roomForImages > 0))
                         },
-                        enabled = !preparingImage && roomForImages > 0,
+                        enabled = !preparingImage && (roomForImages > 0 || roomForVideo),
                         modifier = Modifier.testTag("attach_image_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.AddPhotoAlternate,
-                            contentDescription = "Attach an image",
+                            contentDescription = "Attach images or a video",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -549,13 +562,14 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     Spacer(Modifier.width(8.dp))
 
                     // While voice is active the button stays a stop control, even once words appear.
-                    if ((inputText.isNotBlank() || pendingImages.isNotEmpty()) && voiceState == VoiceState.IDLE) {
+                    if ((inputText.isNotBlank() || pendingImages.isNotEmpty() || pendingVideo != null) && voiceState == VoiceState.IDLE) {
                         IconButton(
                             onClick = {
                                 // Keep the text if it can't be sent yet (a reply is still being written).
-                                if (viewModel.sendMessage(inputText, pendingImages)) {
+                                if (viewModel.sendMessage(inputText, pendingImages, pendingVideo)) {
                                     inputText = ""
                                     pendingImages = emptyList()
+                                    pendingVideo = null
                                 } else {
                                     viewModel.voiceNotice("${identity.name} is still replying. Your message is kept; send it when the reply is done.")
                                 }
@@ -1077,17 +1091,93 @@ fun EmptyChatWelcome(
 }
 
 
-/** The photo picker, allowing up to [input] images (one at a time when only one more fits). */
-private class PickImagesUpTo : androidx.activity.result.contract.ActivityResultContract<Int, List<android.net.Uri>>() {
-    override fun createIntent(context: android.content.Context, input: Int): android.content.Intent {
-        val request = androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-        return if (input <= 1) ActivityResultContracts.PickVisualMedia().createIntent(context, request)
-        else ActivityResultContracts.PickMultipleVisualMedia(input).createIntent(context, request)
+/** What the photo picker may return: up to [maxItems] files, images and/or videos. */
+private data class PickMedia(val maxItems: Int, val videos: Boolean, val images: Boolean)
+
+/** The photo picker for [PickMedia] (one file at a time when only one more fits). */
+private class PickMediaUpTo : androidx.activity.result.contract.ActivityResultContract<PickMedia, List<android.net.Uri>>() {
+    override fun createIntent(context: android.content.Context, input: PickMedia): android.content.Intent {
+        val type = when {
+            input.videos && input.images -> ActivityResultContracts.PickVisualMedia.ImageAndVideo
+            input.videos -> ActivityResultContracts.PickVisualMedia.VideoOnly
+            else -> ActivityResultContracts.PickVisualMedia.ImageOnly
+        }
+        val request = androidx.activity.result.PickVisualMediaRequest(type)
+        return if (input.maxItems <= 1) ActivityResultContracts.PickVisualMedia().createIntent(context, request)
+        else ActivityResultContracts.PickMultipleVisualMedia(input.maxItems).createIntent(context, request)
     }
 
     // Reads both a single pick and a multiple pick.
     override fun parseResult(resultCode: Int, intent: android.content.Intent?): List<android.net.Uri> =
         ActivityResultContracts.PickMultipleVisualMedia().parseResult(resultCode, intent)
+}
+
+/** The line under what's waiting to be sent: what goes to Claude, and what stays on the phone. */
+private fun pendingCaption(images: Int, video: com.example.data.model.ChatVideos.Prepared?): String {
+    val pictures = when (images) {
+        0 -> null
+        1 -> "Your image goes to Claude with your message, without its location or other photo data."
+        else -> "Your $images images go to Claude with your message, without their location or other photo data."
+    }
+    val clip = video?.let {
+        "Claude sees ${if (it.frames.size == 1) "1 still frame" else "${it.frames.size} still frames"} from the video, not its sound; the video stays on this phone."
+    }
+    return listOfNotNull(pictures, clip).joinToString(" ")
+}
+
+/** The video waiting to be sent: its first frame, its length, and a remove button. */
+@Composable
+private fun PendingVideo(video: com.example.data.model.ChatVideos.Prepared, onRemove: () -> Unit) {
+    val poster = remember(video) {
+        video.frames.firstOrNull()?.jpeg?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+    }
+    Box(modifier = Modifier.size(64.dp).testTag("pending_video")) {
+        if (poster != null) {
+            androidx.compose.foundation.Image(
+                bitmap = poster,
+                contentDescription = "Video to send, ${com.example.data.model.ChatVideos.formatTime(video.durationMs)} long",
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))
+            )
+        }
+        VideoBadge(video.durationMs, Modifier.align(Alignment.BottomStart))
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(2.dp)
+                .size(24.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                .clickable(onClickLabel = "Remove video", onClick = onRemove)
+                .testTag("remove_pending_video"),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.Close, contentDescription = "Remove video", modifier = Modifier.size(16.dp))
+        }
+    }
+}
+
+/** A small play mark with the video's length, over its picture. */
+@Composable
+private fun VideoBadge(durationMs: Long, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .padding(4.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.PlayArrow, contentDescription = null,
+            tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(12.dp)
+        )
+        Text(
+            text = com.example.data.model.ChatVideos.formatTime(durationMs),
+            style = MaterialTheme.typography.labelSmall,
+            color = androidx.compose.ui.graphics.Color.White
+        )
+    }
 }
 
 /** An image waiting to be sent: a small preview, its place in the order, and a remove button. */
@@ -1126,18 +1216,23 @@ private fun PendingImage(image: com.example.data.model.ChatImages.Prepared, numb
 private fun MessageImages(names: List<String>) {
     if (names.isEmpty()) return
     var open by remember { mutableStateOf<String?>(null) }
-    val single = names.size == 1
+    var playing by remember { mutableStateOf<String?>(null) }
+    val pictures = names.filterNot { com.example.data.model.Attachments.isVideo(it) }
+    val videos = names.filter { com.example.data.model.Attachments.isVideo(it) }
+    val single = pictures.size == 1
     Column(
         modifier = Modifier.padding(bottom = 6.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        names.chunked(2).forEach { row ->
+        pictures.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 row.forEach { name -> MessageImage(name, single = single, onOpen = { open = name }) }
             }
         }
+        videos.forEach { name -> MessageVideo(name, onPlay = { playing = name }) }
     }
     open?.let { name -> ImageViewer(name, onClose = { open = null }) }
+    playing?.let { name -> VideoPlayer(name, onClose = { playing = null }) }
 }
 
 /** One image the user sent, loaded small from Aura's private storage. */
@@ -1167,6 +1262,97 @@ private fun MessageImage(name: String, single: Boolean, onOpen: () -> Unit) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/** A video in a message: its first frame with a play mark; tapping plays it. */
+@Composable
+private fun MessageVideo(name: String, onPlay: () -> Unit) {
+    val context = LocalContext.current
+    val loaded by androidx.compose.runtime.produceState<Pair<androidx.compose.ui.graphics.ImageBitmap?, Long>?>(null, name) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.example.data.model.ChatVideos.file(context, name)?.let { f ->
+                com.example.data.model.ChatVideos.poster(f, 720)?.asImageBitmap() to com.example.data.model.ChatVideos.durationOf(f)
+            } ?: (null to -1L)
+        }
+    }
+    val (poster, duration) = loaded ?: return
+    if (duration < 0) {
+        Text(
+            text = "[Video no longer on this phone]",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+    Box(
+        modifier = Modifier
+            .widthIn(max = 260.dp)
+            .heightIn(min = 120.dp, max = 260.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(androidx.compose.ui.graphics.Color.Black)
+            .clickable(onClickLabel = "Play video", onClick = onPlay)
+            .testTag("message_video"),
+        contentAlignment = Alignment.Center
+    ) {
+        if (poster != null) {
+            androidx.compose.foundation.Image(
+                bitmap = poster,
+                contentDescription = "Video you sent, ${com.example.data.model.ChatVideos.formatTime(duration)} long. Tap to play.",
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit
+            )
+        }
+        Icon(
+            Icons.Default.PlayArrow, contentDescription = null,
+            tint = androidx.compose.ui.graphics.Color.White,
+            modifier = Modifier
+                .size(48.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.5f))
+                .padding(8.dp)
+        )
+        VideoBadge(duration, Modifier.align(Alignment.BottomStart))
+    }
+}
+
+/** Plays a stored video full screen, with the phone's play, pause and seek controls. */
+@Composable
+private fun VideoPlayer(name: String, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val file = remember(name) { com.example.data.model.ChatVideos.file(context, name) }
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).testTag("video_player"),
+            contentAlignment = Alignment.Center
+        ) {
+            if (file == null) {
+                Text("This video is no longer on this phone.", color = androidx.compose.ui.graphics.Color.White)
+            } else {
+                androidx.compose.ui.viewinterop.AndroidView(
+                    factory = { ctx ->
+                        android.widget.VideoView(ctx).apply {
+                            val controls = android.widget.MediaController(ctx)
+                            controls.setAnchorView(this)
+                            setMediaController(controls)
+                            setVideoURI(android.net.Uri.fromFile(file))
+                            setOnPreparedListener { start(); controls.show(3000) }
+                            setOnErrorListener { _, _, _ -> true }
+                        }
+                    },
+                    onRelease = { it.stopPlayback() },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).testTag("close_video_player")
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Close", tint = androidx.compose.ui.graphics.Color.White)
+            }
+        }
     }
 }
 
