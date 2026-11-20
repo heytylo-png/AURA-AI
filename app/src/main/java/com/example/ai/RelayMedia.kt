@@ -18,14 +18,24 @@ import java.util.concurrent.TimeUnit
 sealed interface MediaRequest {
     val prompt: String
 
-    data class Image(override val prompt: String, val shape: String) : MediaRequest
-    data class Video(override val prompt: String, val seconds: Int, val shape: String) : MediaRequest
+    /** [fromAttachedImage]: edit the picture attached to the message. [sticker]: transparent PNG sticker. */
+    data class Image(
+        override val prompt: String,
+        val shape: String,
+        val fromAttachedImage: Boolean = false,
+        val sticker: Boolean = false
+    ) : MediaRequest
+
+    /** [fromAttachedImage]: the picture attached to the message becomes the first frame. */
+    data class Video(override val prompt: String, val seconds: Int, val shape: String, val fromAttachedImage: Boolean = false) : MediaRequest
 
     companion object {
         const val MAX_PROMPT_CHARS = 4000
         val IMAGE_SHAPES = setOf("square", "landscape", "portrait")
         val VIDEO_SHAPES = setOf("portrait", "landscape")
         val VIDEO_SECONDS = setOf(4, 8, 12)
+        /** The video sizes the relay asks for, by shape (a first frame must match exactly). */
+        val VIDEO_SIZES = mapOf("portrait" to (720 to 1280), "landscape" to (1280 to 720))
         val TOOL_NAMES = setOf("generate_image", "generate_video")
 
         /** Reads Claude's tool call; null if it isn't one of these tools or its fields are wrong. */
@@ -33,10 +43,18 @@ sealed interface MediaRequest {
             val input = runCatching { JSONObject(call.inputJson) }.getOrNull() ?: return null
             val prompt = input.optString("prompt").trim().takeIf { it.isNotEmpty() && it.length <= MAX_PROMPT_CHARS } ?: return null
             return when (call.name) {
-                "generate_image" -> Image(prompt, input.optString("shape").takeIf { it in IMAGE_SHAPES } ?: "square")
+                "generate_image" -> Image(
+                    prompt,
+                    input.optString("shape").takeIf { it in IMAGE_SHAPES } ?: "square",
+                    fromAttachedImage = input.optBoolean("from_attached_image", false),
+                    sticker = input.optBoolean("sticker", false)
+                )
                 "generate_video" -> {
                     val seconds = input.optString("seconds").toIntOrNull()?.takeIf { it in VIDEO_SECONDS } ?: 4
-                    Video(prompt, seconds, input.optString("shape").takeIf { it in VIDEO_SHAPES } ?: "portrait")
+                    Video(
+                        prompt, seconds, input.optString("shape").takeIf { it in VIDEO_SHAPES } ?: "portrait",
+                        fromAttachedImage = input.optBoolean("from_attached_image", false)
+                    )
                 }
                 else -> null
             }
@@ -68,19 +86,38 @@ class RelayMedia(
 
     class MediaError(message: String) : Exception(message)
 
-    /** Makes an image; returns its JPEG bytes. */
-    suspend fun generateImage(prompt: String, shape: String): Result<ByteArray> = call {
-        val body = JSONObject().put("prompt", prompt).put("shape", shape)
-        execute(post("/v1/image", body)).use { res ->
-            val json = JSONObject(res.body?.string().orEmpty())
-            val b64 = json.optString("image").takeIf { it.isNotEmpty() } ?: throw MediaError("no image came back")
-            android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
-        }
+    /** A made image: JPEG, or PNG for a sticker. */
+    class Made(val bytes: ByteArray, val png: Boolean)
+
+    /** Makes an image (a transparent PNG with [sticker]). */
+    suspend fun generateImage(prompt: String, shape: String, sticker: Boolean = false): Result<Made> = call {
+        val body = JSONObject().put("prompt", prompt).put("shape", shape).apply { if (sticker) put("sticker", true) }
+        made(execute(post("/v1/image", body)))
     }
 
-    /** Starts making a video; it takes a few minutes. */
-    suspend fun startVideo(prompt: String, seconds: Int, shape: String): Result<VideoJob> = call {
+    /** Edits [image] (JPEG or PNG) as [prompt] says; with [sticker], cuts it out as a transparent sticker. */
+    suspend fun editImage(prompt: String, image: ByteArray, sticker: Boolean = false): Result<Made> = call {
+        val body = withImage(JSONObject().put("prompt", prompt), image).apply { if (sticker) put("sticker", true) }
+        made(execute(post("/v1/image/edit", body)))
+    }
+
+    private fun made(res: Response): Made = res.use {
+        val json = JSONObject(it.body?.string().orEmpty())
+        val b64 = json.optString("image").takeIf { s -> s.isNotEmpty() } ?: throw MediaError("no image came back")
+        Made(android.util.Base64.decode(b64, android.util.Base64.DEFAULT), json.optString("mediaType") == "image/png")
+    }
+
+    private fun withImage(body: JSONObject, image: ByteArray): JSONObject = body
+        .put("image", android.util.Base64.encodeToString(image, android.util.Base64.NO_WRAP))
+        .put("imageType", ClaudeRelayProvider.imageType(image))
+
+    /**
+     * Starts making a video; it takes a few minutes. [firstFrame], if given, must already be the
+     * video's exact size (see ChatImages.fitExactly).
+     */
+    suspend fun startVideo(prompt: String, seconds: Int, shape: String, firstFrame: ByteArray? = null): Result<VideoJob> = call {
         val body = JSONObject().put("prompt", prompt).put("seconds", seconds.toString()).put("shape", shape)
+            .apply { if (firstFrame != null) withImage(this, firstFrame) }
         execute(post("/v1/video", body)).use { res ->
             val json = JSONObject(res.body?.string().orEmpty())
             VideoJob(json.optString("id"), json.optString("ticket")).takeIf { it.id.isNotEmpty() && it.ticket.isNotEmpty() }

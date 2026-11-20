@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Folders whose files Aura may hand to another app when the user taps Share (or sets an alert
+     sound). Each file is shared only for that one action, read-only. -->
+<paths>
+    <files-path name="chat_images" path="chat_images/" />
+    <files-path name="chat_videos" path="chat_videos/" />
+    <files-path name="library" path="library/" />
+</paths>

@@ -16,6 +16,7 @@ import com.example.data.model.ProjectEntity
 import com.example.data.model.TaskActionEntity
 import com.example.data.model.UserSettingsEntity
 import com.example.data.model.TodoEntity
+import com.example.data.model.SavedMediaEntity
 
 /**
  * Current schema version. Raising it REQUIRES, in the same change:
@@ -23,7 +24,7 @@ import com.example.data.model.TodoEntity
  *  2. the new schema file committed under app/schemas/ (written by the build),
  * DatabaseUpgradeTest fails until both exist.
  */
-const val DATABASE_VERSION = 8
+const val DATABASE_VERSION = 9
 
 @Database(
     entities = [
@@ -35,7 +36,8 @@ const val DATABASE_VERSION = 8
         ChatMessageEntity::class,
         ChatSessionEntity::class,
         UserSettingsEntity::class,
-        TodoEntity::class
+        TodoEntity::class,
+        SavedMediaEntity::class
     ],
     version = DATABASE_VERSION,
     // Room writes the schema of every version to app/schemas/ (committed to git), so
@@ -50,6 +52,7 @@ abstract class AppDatabase : RoomDatabase() {
      */
     abstract fun memoryDao(): MemoryDao
     abstract fun todoDao(): TodoDao
+    abstract fun savedMediaDao(): SavedMediaDao
 
     /**
      * Data Access Object for persisting projects, milestones, and knowledge artifacts.
@@ -117,8 +120,23 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 8 -> 9: the media library (a new table), and a to-do can carry a picture for its reminder.
+         * Nothing existing changes; existing to-dos have no picture.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `saved_media` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`fileName` TEXT NOT NULL, `kind` TEXT NOT NULL, `label` TEXT NOT NULL, " +
+                        "`isReference` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL("ALTER TABLE todos ADD COLUMN imageName TEXT")
+            }
+        }
+
         /** Every schema upgrade, in order. */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
 
         @Volatile
         private var INSTANCE: AppDatabase? = null

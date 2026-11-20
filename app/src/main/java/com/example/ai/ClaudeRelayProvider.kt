@@ -294,6 +294,11 @@ class ClaudeRelayProvider(
             .callTimeout(3, TimeUnit.MINUTES)
             .build()
 
+        /** PNG (stickers, saved pictures) or JPEG (everything Aura prepares itself). */
+        fun imageType(bytes: ByteArray): String =
+            if (bytes.size > 4 && bytes[0] == 0x89.toByte() && bytes[1] == 'P'.code.toByte() && bytes[2] == 'N'.code.toByte() && bytes[3] == 'G'.code.toByte()) "image/png"
+            else "image/jpeg"
+
         /** Earlier turns, oldest first, then the new message. */
         fun messagesJson(request: AiProviderRequest): JSONArray {
             val array = JSONArray()
@@ -309,7 +314,7 @@ class ClaudeRelayProvider(
                     blocks.put(
                         JSONObject().put("type", "image").put(
                             "source",
-                            JSONObject().put("type", "base64").put("media_type", "image/jpeg")
+                            JSONObject().put("type", "base64").put("media_type", imageType(image))
                                 .put("data", android.util.Base64.encodeToString(image, android.util.Base64.NO_WRAP))
                         )
                     )

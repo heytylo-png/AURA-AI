@@ -42,6 +42,16 @@ import com.example.viewmodel.AuraViewModel
 
 @Composable
 fun MainScreen(viewModel: AuraViewModel) {
+    // Pictures and videos opened anywhere in the app get the same Save, Share and Library actions.
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.example.ui.components.LocalMediaViewerActions provides com.example.ui.components.rememberAuraMediaActions(viewModel)
+    ) {
+        MainScreenContent(viewModel)
+    }
+}
+
+@Composable
+private fun MainScreenContent(viewModel: AuraViewModel) {
     val selectedTab by viewModel.selectedTab.collectAsState()
     val pendingApprovals by viewModel.pendingApprovalCount.collectAsState()
     val allMemories by viewModel.allMemories.collectAsState()

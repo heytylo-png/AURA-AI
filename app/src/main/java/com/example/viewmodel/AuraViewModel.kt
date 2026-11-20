@@ -210,8 +210,14 @@ class AuraViewModel @JvmOverloads constructor(
         _mediaGeneration.value = enabled
     }
 
-    /** A video Claude suggested, waiting for the user to confirm it (videos cost much more than images). */
-    data class VideoToConfirm(val request: com.example.ai.MediaRequest.Video, val sessionId: Long, val projectId: Long?)
+    /** A video waiting for the user to confirm it (videos cost much more than images). */
+    data class VideoToConfirm(
+        val request: com.example.ai.MediaRequest.Video,
+        val sessionId: Long,
+        val projectId: Long?,
+        /** The picture the video starts from, if any (already the video's exact size). */
+        val firstFrame: ByteArray? = null
+    )
 
     private val _videoToConfirm = MutableStateFlow<VideoToConfirm?>(null)
     val videoToConfirm: StateFlow<VideoToConfirm?> = _videoToConfirm.asStateFlow()
@@ -223,12 +229,27 @@ class AuraViewModel @JvmOverloads constructor(
 
     private val relayMedia by lazy { com.example.ai.RelayMedia(BuildConfig.AURA_RELAY_URL, relayAuth) }
 
-    private fun onMediaRequested(request: com.example.ai.MediaRequest, sessionId: Long, projectId: Long?) {
+    /** Claude asked for an image or video; [attached] is the first picture sent with that message, if any. */
+    private fun onMediaRequested(request: com.example.ai.MediaRequest, sessionId: Long, projectId: Long?, attached: ByteArray?) {
         when (request) {
-            is com.example.ai.MediaRequest.Image -> createImage(request, sessionId, projectId)
-            is com.example.ai.MediaRequest.Video -> _videoToConfirm.value = VideoToConfirm(request, sessionId, projectId)
+            is com.example.ai.MediaRequest.Image -> {
+                val source = attached?.takeIf { request.fromAttachedImage }
+                if (request.fromAttachedImage && source == null) {
+                    voiceNotice("Claude wanted to edit an attached picture, but none was attached, so it starts from scratch.")
+                }
+                createImage(request.prompt, request.shape, request.sticker, source, sessionId, projectId)
+            }
+            is com.example.ai.MediaRequest.Video -> {
+                val frame = attached?.takeIf { request.fromAttachedImage }?.let { firstFrameFor(it, request.shape) }
+                _videoToConfirm.value = VideoToConfirm(request, sessionId, projectId, frame)
+            }
         }
     }
+
+    private fun firstFrameFor(image: ByteArray, shape: String): ByteArray? = runCatching {
+        val (w, h) = com.example.ai.MediaRequest.VIDEO_SIZES[shape] ?: (720 to 1280)
+        com.example.data.model.ChatImages.fitExactly(image, w, h)
+    }.getOrNull()
 
     fun declineVideo() {
         _videoToConfirm.value = null
@@ -237,7 +258,52 @@ class AuraViewModel @JvmOverloads constructor(
     fun confirmVideo() {
         val pending = _videoToConfirm.value ?: return
         _videoToConfirm.value = null
-        createVideo(pending.request, pending.sessionId, pending.projectId)
+        createVideo(pending.request, pending.sessionId, pending.projectId, pending.firstFrame)
+    }
+
+    /** Reads a stored picture's bytes (chat image or library), for editing. */
+    private fun storedImageBytes(name: String): ByteArray? =
+        com.example.data.model.MediaLibrary.find(getApplication(), name)?.takeIf { !com.example.data.model.MediaLibrary.isVideoFile(name) }?.readBytes()
+
+    private fun sessionForCreation(): Pair<Long, Long?>? {
+        val id = activeSessionIdOrNull() ?: run { voiceNotice("Open a chat first; the result appears there."); return null }
+        return id to _activeSession.value?.associatedProjectId
+    }
+
+    /** From the viewer: edit a stored picture as the user describes. */
+    fun editImage(name: String, prompt: String) {
+        val (session, project) = sessionForCreation() ?: return
+        viewModelScope.launch {
+            val bytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { storedImageBytes(name) }
+                ?: return@launch voiceNotice("That picture is no longer on this phone.")
+            createImage(prompt, "square", sticker = false, source = bytes, sessionId = session, projectId = project)
+        }
+    }
+
+    /** From the viewer: cut a stored picture out as a sticker. */
+    fun makeSticker(name: String) {
+        val (session, project) = sessionForCreation() ?: return
+        viewModelScope.launch {
+            val bytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { storedImageBytes(name) }
+                ?: return@launch voiceNotice("That picture is no longer on this phone.")
+            createImage("The main subject of this picture.", "square", sticker = true, source = bytes, sessionId = session, projectId = project)
+        }
+    }
+
+    /** From the viewer: a video that starts from a stored picture. Asks for confirmation first, like Claude's videos. */
+    fun videoFromImage(name: String, prompt: String, seconds: Int) {
+        val (session, project) = sessionForCreation() ?: return
+        viewModelScope.launch {
+            val bytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { storedImageBytes(name) }
+                ?: return@launch voiceNotice("That picture is no longer on this phone.")
+            val shape = runCatching {
+                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+                if (o.outWidth > o.outHeight) "landscape" else "portrait"
+            }.getOrDefault("portrait")
+            val request = com.example.ai.MediaRequest.Video(prompt, seconds, shape, fromAttachedImage = true)
+            _videoToConfirm.value = VideoToConfirm(request, session, project, firstFrameFor(bytes, shape))
+        }
     }
 
     /** Stops waiting for an image or video. (A video OpenAI already started is still billed.) */
@@ -274,31 +340,57 @@ class AuraViewModel @JvmOverloads constructor(
         )
     }
 
-    private fun createImage(request: com.example.ai.MediaRequest.Image, sessionId: Long, projectId: Long?) {
+    private fun createImage(prompt: String, shape: String, sticker: Boolean, source: ByteArray?, sessionId: Long, projectId: Long?) {
         startMediaJob {
-            _mediaStatus.value = "Creating an image with OpenAI\u2026"
-            val details = "Made by OpenAI's image model through your Aura relay, from Claude's description: \u201c${request.prompt}\u201d"
-            relayMedia.generateImage(request.prompt, request.shape)
-                .mapCatching { bytes ->
+            _mediaStatus.value = when {
+                sticker -> "Making a sticker with OpenAI\u2026"
+                source != null -> "Editing the picture with OpenAI\u2026"
+                else -> "Creating an image with OpenAI\u2026"
+            }
+            val what = if (sticker) "sticker" else "image"
+            val details = "Made by OpenAI's image model through your Aura relay" +
+                (if (source != null) ", from a picture you chose" else "") +
+                ", following: \u201c$prompt\u201d"
+            val result = if (source != null) relayMedia.editImage(prompt, source, sticker) else relayMedia.generateImage(prompt, shape, sticker)
+            result
+                .mapCatching { made ->
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        com.example.data.model.ChatImages.save(getApplication(), com.example.data.model.ChatImages.prepare(bytes))
+                        val app = getApplication<Application>()
+                        if (made.png && sticker) {
+                            val name = com.example.data.model.ChatImages.savePng(app, made.bytes)
+                            // Stickers also go straight to the library, ready to share or reuse.
+                            val copy = com.example.data.model.MediaLibrary.writeIn(app, made.bytes, "png")
+                            db.savedMediaDao().insert(
+                                com.example.data.model.SavedMediaEntity(fileName = copy, kind = com.example.data.model.MediaLibrary.KIND_STICKER)
+                            )
+                            name
+                        } else {
+                            com.example.data.model.ChatImages.save(app, com.example.data.model.ChatImages.prepare(made.bytes))
+                        }
                     }
                 }
-                .onSuccess { name -> insertMediaMessage(sessionId, projectId, "Here's the image.", details, name) }
+                .onSuccess { name ->
+                    insertMediaMessage(
+                        sessionId, projectId,
+                        if (sticker) "Here's your sticker. It's also saved in your library." else "Here's the $what.",
+                        details, name
+                    )
+                }
                 .onFailure { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    insertMediaMessage(sessionId, projectId, "Couldn't create the image: ${e.message}", details)
+                    insertMediaMessage(sessionId, projectId, "Couldn't create the $what: ${e.message}", details)
                 }
         }
     }
 
-    private fun createVideo(request: com.example.ai.MediaRequest.Video, sessionId: Long, projectId: Long?) {
+    private fun createVideo(request: com.example.ai.MediaRequest.Video, sessionId: Long, projectId: Long?, firstFrame: ByteArray? = null) {
         startMediaJob {
-            val details = "Made by OpenAI's video model through your Aura relay (${request.seconds} seconds, ${request.shape}), " +
-                "from Claude's description: \u201c${request.prompt}\u201d"
+            val details = "Made by OpenAI's video model through your Aura relay (${request.seconds} seconds, ${request.shape})" +
+                (if (firstFrame != null) ", starting from a picture you chose" else "") +
+                ", following: \u201c${request.prompt}\u201d"
             _mediaStatus.value = "Starting the video\u2026"
             val result = runCatching {
-                val job = relayMedia.startVideo(request.prompt, request.seconds, request.shape).getOrThrow()
+                val job = relayMedia.startVideo(request.prompt, request.seconds, request.shape, firstFrame).getOrThrow()
                 // Videos take a few minutes; check every few seconds, for up to 20 minutes.
                 val deadline = System.currentTimeMillis() + 20 * 60_000L
                 while (true) {
@@ -332,6 +424,110 @@ class AuraViewModel @JvmOverloads constructor(
                 }
         }
     }
+
+    // ---- The media library: pictures, stickers and videos the user keeps, each with its own copy. ----
+
+    val library: StateFlow<List<com.example.data.model.SavedMediaEntity>> = db.savedMediaDao().observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private fun activeSessionIdOrNull(): Long? = _activeSession.value?.id
+
+    /** Copies a picture or video from a chat into the library. */
+    fun addToLibrary(name: String, label: String, reference: Boolean, sticker: Boolean = false) {
+        viewModelScope.launch {
+            val result = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val app = getApplication<Application>()
+                    val source = com.example.data.model.MediaLibrary.find(app, name) ?: throw IllegalStateException("It's no longer on this phone.")
+                    val copy = com.example.data.model.MediaLibrary.copyIn(app, source)
+                    val kind = com.example.data.model.MediaLibrary.kindFor(copy, sticker)
+                    db.savedMediaDao().insert(
+                        com.example.data.model.SavedMediaEntity(
+                            fileName = copy, kind = kind, label = label.trim().take(com.example.data.model.MediaLibrary.MAX_LABEL),
+                            isReference = reference && kind != com.example.data.model.MediaLibrary.KIND_VIDEO && label.isNotBlank()
+                        )
+                    )
+                }
+            }
+            voiceNotice(result.fold({ "Saved to your library." }, { "Couldn't save it: ${it.message}" }))
+        }
+    }
+
+    fun updateLibraryItem(item: com.example.data.model.SavedMediaEntity) {
+        viewModelScope.launch {
+            db.savedMediaDao().update(
+                item.copy(
+                    label = item.label.trim().take(com.example.data.model.MediaLibrary.MAX_LABEL),
+                    isReference = item.isReference && !item.isVideo && item.label.isNotBlank()
+                )
+            )
+        }
+    }
+
+    fun deleteLibraryItem(item: com.example.data.model.SavedMediaEntity) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            db.savedMediaDao().delete(item.id)
+            deleteUnusedLibraryFiles()
+        }
+    }
+
+    /** Library files no item or to-do uses any more are deleted. */
+    private suspend fun deleteUnusedLibraryFiles() {
+        runCatching {
+            val inUse = db.savedMediaDao().fileNamesInUse().toSet() + db.todoDao().imageNamesInUse().toSet()
+            com.example.data.model.MediaLibrary.deleteUnused(getApplication(), inUse)
+        }
+    }
+
+    /** Copies a stored picture or video to the phone's gallery. */
+    fun saveToGallery(name: String) {
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val app = getApplication<Application>()
+                val file = com.example.data.model.MediaLibrary.find(app, name)
+                    ?: return@withContext Result.failure(IllegalStateException("It's no longer on this phone."))
+                com.example.media.MediaActions.saveToGallery(app, file)
+            }
+            voiceNotice(result.fold({ "Saved to your gallery, in the Aura album." }, { "Couldn't save it: ${it.message}" }))
+        }
+    }
+
+    /**
+     * Prepares a library item to send with a message, like a picked file: a picture (re-encoded, no
+     * metadata) or a video (copied, with its still frames).
+     */
+    suspend fun prepareFromLibrary(item: com.example.data.model.SavedMediaEntity): Result<Any> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val app = getApplication<Application>()
+                val file = com.example.data.model.MediaLibrary.file(app, item.fileName) ?: throw IllegalStateException("It's no longer on this phone.")
+                if (item.isVideo) {
+                    val ext = com.example.data.model.MediaLibrary.extensionOf(file.name)
+                    val temp = java.io.File(com.example.data.model.ChatVideos.dir(app), "vid_${java.util.UUID.randomUUID()}.$ext.part")
+                    file.copyTo(temp)
+                    try {
+                        com.example.data.model.ChatVideos.prepareFile(temp, ext)
+                    } catch (e: Exception) {
+                        temp.delete()
+                        throw e
+                    }
+                } else {
+                    com.example.data.model.ChatImages.prepare(file.readBytes())
+                }
+            }
+        }
+
+    /** The library's references a message mentions, with their pictures, for Claude. */
+    private suspend fun referencesFor(text: String): List<com.example.ai.ReferenceImage> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val app = getApplication<Application>()
+                com.example.data.model.MediaLibrary.referencesIn(text, db.savedMediaDao().getReferences()).mapNotNull { item ->
+                    val file = com.example.data.model.MediaLibrary.file(app, item.fileName) ?: return@mapNotNull null
+                    com.example.ai.ReferenceImage(item.label, file.readBytes())
+                }
+            }.getOrDefault(emptyList())
+        }
 
     private val _elevenLabsVoice = MutableStateFlow(privacyPrefs.getBoolean("elevenlabs_voice", false))
     val elevenLabsVoice: StateFlow<Boolean> = _elevenLabsVoice.asStateFlow()
@@ -633,6 +829,73 @@ class AuraViewModel @JvmOverloads constructor(
         resyncReminders()
     }
 
+    /** Whether reminders play the user's own sound (from a video) instead of the phone's default. */
+    private val _customAlertSound = MutableStateFlow(reminderPrefs.customSound != null)
+    val customAlertSound: StateFlow<Boolean> = _customAlertSound.asStateFlow()
+
+    /** Uses the sound of a stored video (its first 30 seconds) for reminders. */
+    fun useAsAlertSound(name: String) {
+        if (!com.example.reminders.AlertSounds.supported) {
+            voiceNotice("Custom reminder sounds need Android 10 or newer.")
+            return
+        }
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val app = getApplication<Application>()
+                    val video = com.example.data.model.MediaLibrary.find(app, name)?.takeIf { com.example.data.model.MediaLibrary.isVideoFile(name) }
+                        ?: throw IllegalStateException("That video is no longer on this phone.")
+                    val temp = java.io.File(app.cacheDir, "aura_alert_${System.nanoTime()}.m4a")
+                    try {
+                        com.example.reminders.AlertSounds.extractSound(video, temp)
+                        val previous = reminderPrefs.customSound?.let { android.net.Uri.parse(it) }
+                        val uri = com.example.reminders.AlertSounds.install(app, temp, previous)
+                        com.example.reminders.Reminders.useSound(app, uri)
+                    } finally {
+                        temp.delete()
+                    }
+                }
+            }
+            result.onSuccess { _customAlertSound.value = true }
+            voiceNotice(result.fold({ "Reminders now play this video's sound." }, { "Couldn't use its sound: ${it.message}" }))
+        }
+    }
+
+    /** Back to the phone's default reminder sound; removes the sound Aura added. */
+    fun resetAlertSound() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val app = getApplication<Application>()
+            reminderPrefs.customSound?.let { com.example.reminders.AlertSounds.remove(app, android.net.Uri.parse(it)) }
+            com.example.reminders.Reminders.useSound(app, null)
+            _customAlertSound.value = false
+        }
+    }
+
+    /** Puts a library picture on a to-do (shown in the list and in its reminder), or removes it with null. */
+    fun setTodoImage(todo: TodoEntity, item: com.example.data.model.SavedMediaEntity?) {
+        if (item != null && item.isVideo) return voiceNotice("Reminders can show a picture, not a video.")
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            todoDao.update(todo.copy(imageName = item?.fileName, updatedAt = System.currentTimeMillis()))
+            if (item == null) deleteUnusedLibraryFiles()
+        }
+    }
+
+    /** Puts a picture from the phone on a to-do: it's prepared like a chat image and kept with the to-do. */
+    fun setTodoImageFromPhone(todo: TodoEntity, uri: android.net.Uri) {
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val app = getApplication<Application>()
+                    val prepared = com.example.data.model.ChatImages.prepare(app, uri)
+                    val name = com.example.data.model.MediaLibrary.writeIn(app, prepared.jpeg, "jpg")
+                    todoDao.update(todo.copy(imageName = name, updatedAt = System.currentTimeMillis()))
+                    deleteUnusedLibraryFiles()
+                }
+            }
+            result.onFailure { voiceNotice(it.message ?: "That picture couldn't be used.") }
+        }
+    }
+
     private fun resyncReminders() {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             com.example.reminders.Reminders.sync(getApplication(), todoDao.getOpen())
@@ -680,7 +943,10 @@ class AuraViewModel @JvmOverloads constructor(
 
     /** Removes a to-do from Recently deleted for good. */
     fun deleteTodoForever(todo: TodoEntity) {
-        viewModelScope.launch { todoDao.deleteForever(todo.id) }
+        viewModelScope.launch {
+            todoDao.deleteForever(todo.id)
+            if (todo.imageName != null) deleteUnusedLibraryFiles()
+        }
     }
 
     // Recent 5 Sessions for Persistent Drawer
@@ -895,6 +1161,7 @@ class AuraViewModel @JvmOverloads constructor(
                     _activeSession.value = updatedSess
                 }
 
+                val references = referencesFor(text)
                 val memories = memoryRepository.getActiveMemories()
                 val projects = projectRepository.getAllProjectsSnapshot()
 
@@ -919,8 +1186,9 @@ class AuraViewModel @JvmOverloads constructor(
                     images = images.map { it.jpeg } + video?.frames.orEmpty().map { it.jpeg },
                     videoFrames = video?.frames?.size ?: 0,
                     attachmentNote = video?.let {
-                        com.example.data.model.ChatVideos.noteForClaude(it.durationMs, it.frames, picturesBefore = images.size)
-                    }
+                        com.example.data.model.ChatVideos.noteForClaude(it.durationMs, it.frames, picturesBefore = images.size + references.size)
+                    },
+                    references = references
                 ).collect { state ->
                     when (state) {
                         is HybridAiState.Starting -> {}
@@ -955,7 +1223,7 @@ class AuraViewModel @JvmOverloads constructor(
                                 proposedActionId = actionId
                             )
                             chatRepository.insertMessage(aiMsg)
-                            state.mediaRequest?.let { onMediaRequested(it, currentSessionId, currentProj?.id) }
+                            state.mediaRequest?.let { onMediaRequested(it, currentSessionId, currentProj?.id, images.firstOrNull()?.jpeg) }
 
                             // If auto-speak enabled, speak the answer
                             if (_identity.value.autoSpeakResponses) {

@@ -133,7 +133,7 @@ class MediaTest {
         try {
             val media = RelayMedia(server.url("/").toString(), tokens)
             server.enqueue(MockResponse().setBody("""{"image":"AQID","mediaType":"image/jpeg"}"""))
-            assertArrayEquals(byteArrayOf(1, 2, 3), media.generateImage("a cat", "square").getOrThrow())
+            assertArrayEquals(byteArrayOf(1, 2, 3), media.generateImage("a cat", "square").getOrThrow().bytes)
             val imageCall = server.takeRequest()
             assertEquals("/v1/image", imageCall.path)
             assertEquals("Bearer token", imageCall.getHeader("Authorization"))

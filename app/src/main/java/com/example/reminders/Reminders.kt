@@ -35,6 +35,16 @@ class ReminderPrefs(context: Context) {
         get() = prefs.getInt("hour", ReminderPlan.DEFAULT_HOUR).coerceIn(ReminderPlan.HOURS)
         set(v) = prefs.edit().putInt("hour", v.coerceIn(ReminderPlan.HOURS)).apply()
 
+    /** The notification channel reminders use now: the default one, or one with the user's own sound. */
+    var channelId: String
+        get() = prefs.getString("channel_id", Reminders.CHANNEL_ID) ?: Reminders.CHANNEL_ID
+        set(v) = prefs.edit().putString("channel_id", v).apply()
+
+    /** The user's own reminder sound (a notification sound Aura added), or null for the phone's default. */
+    var customSound: String?
+        get() = prefs.getString("custom_sound", null)
+        set(v) = prefs.edit().putString("custom_sound", v).apply()
+
     /** Reminders at or before this time have been handled (shown, or skipped while off). */
     var lastHandledAt: Long
         get() = prefs.getLong("last_handled_at", 0L)
@@ -90,14 +100,43 @@ object Reminders {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-    fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT < 26) return
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+    /** Creates the channel reminders use now (with the user's own sound, if they chose one). Returns its ID. */
+    fun ensureChannel(context: Context): String {
+        val prefs = ReminderPrefs(context)
+        val id = prefs.channelId
+        if (Build.VERSION.SDK_INT < 26) return id
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return id
+        val sound = prefs.customSound?.let { android.net.Uri.parse(it) }
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "To-do reminders", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            NotificationChannel(id, "To-do reminders", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "A reminder on the day a to-do is due."
+                if (id != CHANNEL_ID && sound != null) {
+                    setSound(
+                        sound,
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                }
             }
         )
+        return id
+    }
+
+    /**
+     * Switches reminders to [sound] (null: the phone's default sound). A channel's sound can't change
+     * once made, so each change gets a new channel and the old one is removed.
+     */
+    fun useSound(context: Context, sound: android.net.Uri?) {
+        val prefs = ReminderPrefs(context)
+        val old = prefs.channelId
+        prefs.customSound = sound?.toString()
+        prefs.channelId = if (sound == null) CHANNEL_ID else "${CHANNEL_ID}_sound_${System.currentTimeMillis()}"
+        if (Build.VERSION.SDK_INT >= 26 && old != prefs.channelId) {
+            context.getSystemService(NotificationManager::class.java)?.deleteNotificationChannel(old)
+        }
+        ensureChannel(context)
     }
 
     private fun notify(context: Context, due: List<TodoEntity>) {
@@ -105,7 +144,7 @@ object Reminders {
             Log.i(TAG, "${due.size} reminder(s) due, but notifications aren't allowed")
             return
         }
-        ensureChannel(context)
+        val channel = ensureChannel(context)
         val open = PendingIntent.getActivity(
             context, 0,
             Intent(context, MainActivity::class.java)
@@ -114,16 +153,26 @@ object Reminders {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         // On the lock screen, show only that something is due, not the title.
-        val publicVersion = NotificationCompat.Builder(context, CHANNEL_ID)
+        val publicVersion = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_stat_todo)
             .setContentTitle(if (due.size == 1) "A to-do is due today" else "${due.size} to-dos are due today")
             .build()
         val manager = NotificationManagerCompat.from(context)
         for (todo in due) {
-            val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            // A to-do's picture shows in its reminder (only when the phone is unlocked; see publicVersion).
+            val picture = todo.imageName?.let { name ->
+                com.example.data.model.MediaLibrary.file(context, name)?.let { com.example.data.model.ChatImages.thumbnail(it, 1024) }
+            }
+            val notification = NotificationCompat.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_stat_todo)
                 .setContentTitle("Due today")
                 .setContentText(todo.title)
+                .apply {
+                    if (picture != null) {
+                        setLargeIcon(picture)
+                        setStyle(NotificationCompat.BigPictureStyle().bigPicture(picture).setSummaryText(todo.title))
+                    }
+                }
                 .setContentIntent(open)
                 .setAutoCancel(true)
                 .setCategory(NotificationCompat.CATEGORY_REMINDER)

@@ -8,6 +8,7 @@ import android.util.Log
 import com.example.data.local.AppDatabase
 import com.example.data.local.DATABASE_VERSION
 import com.example.data.model.ChatImages
+import com.example.data.model.MediaLibrary
 import org.json.JSONArray
 import org.json.JSONObject
 import android.provider.DocumentsContract
@@ -53,6 +54,10 @@ class BackupManager(private val context: Context) {
                 BackupCrypto.putEntry(zip, PREFS_ENTRY, exportPrefs().toByteArray(Charsets.UTF_8).inputStream())
                 // Images attached to chat messages, one entry each, under their own names.
                 ChatImages.dir(app).listFiles()?.filter { ChatImages.isValidName(it.name) }?.sortedBy { it.name }?.forEach { f ->
+                    f.inputStream().use { BackupCrypto.putEntry(zip, f.name, it) }
+                }
+                // Library pictures and stickers too; library videos stay out, like chat videos, for size.
+                libraryPictures(MediaLibrary.dir(app)).sortedBy { it.name }.forEach { f ->
                     f.inputStream().use { BackupCrypto.putEntry(zip, f.name, it) }
                 }
             }
@@ -112,7 +117,7 @@ class BackupManager(private val context: Context) {
                     DB_ENTRY -> { temp.outputStream().use { data.copyTo(it) }; hasDatabase = true }
                     PREFS_ENTRY -> settings = String(readSmall(data), Charsets.UTF_8)
                     // Images: only names Aura itself gives them, each of a sensible size.
-                    else -> if (ChatImages.isValidName(name)) {
+                    else -> if (ChatImages.isValidName(name) || (MediaLibrary.isValidName(name) && !MediaLibrary.isVideoName(name))) {
                         images.mkdirs()
                         File(images, name).outputStream().use { out -> copyAtMost(data, out, MAX_IMAGE_BYTES) }
                     }
@@ -149,6 +154,18 @@ class BackupManager(private val context: Context) {
      * copy, like the database (see [removeOldSafetyCopy]).
      */
     private fun restoreImages(staged: File?) {
+        // Library pictures travel in the same staged folder; they go back to the library, whose
+        // videos (not in backups) stay where they are.
+        val library = MediaLibrary.dir(app)
+        val libraryPrevious = File(app.filesDir, LIBRARY_BEFORE_RESTORE)
+        libraryPrevious.deleteRecursively()
+        libraryPrevious.mkdirs()
+        libraryPictures(library).forEach { f -> if (!f.renameTo(File(libraryPrevious, f.name))) f.delete() }
+        libraryPrevious.setLastModified(System.currentTimeMillis())
+        staged?.listFiles()?.filter { MediaLibrary.isValidName(it.name) }?.forEach { f ->
+            if (!f.renameTo(File(library, f.name))) { f.copyTo(File(library, f.name), overwrite = true); f.delete() }
+        }
+
         val current = ChatImages.dir(app)
         val previous = File(app.filesDir, IMAGES_BEFORE_RESTORE)
         previous.deleteRecursively()
@@ -260,7 +277,7 @@ class BackupManager(private val context: Context) {
         for (file in PREFS_FILES) {
             val values = JSONObject()
             for ((key, value) in app.getSharedPreferences(file, Context.MODE_PRIVATE).all) {
-                if (file == REMINDER_PREFS && key == "last_handled_at") continue
+                if (file == REMINDER_PREFS && key in PHONE_ONLY_REMINDER_KEYS) continue
                 val typed = when (value) {
                     is Boolean -> JSONObject().put("t", "b").put("v", value)
                     is Int -> JSONObject().put("t", "i").put("v", value)
@@ -282,7 +299,13 @@ class BackupManager(private val context: Context) {
         val root = runCatching { JSONObject(json) }.getOrNull() ?: return
         for (file in PREFS_FILES) {
             val values = root.optJSONObject(file) ?: continue
-            val editor = app.getSharedPreferences(file, Context.MODE_PRIVATE).edit().clear()
+            val prefs = app.getSharedPreferences(file, Context.MODE_PRIVATE)
+            // The reminder sound belongs to this phone (it's one of its notification sounds): keep it.
+            val keep = if (file == REMINDER_PREFS) PHONE_ONLY_REMINDER_KEYS.associateWith { prefs.all[it] } else emptyMap()
+            val editor = prefs.edit().clear()
+            keep.forEach { (k, v) ->
+                when (v) { is String -> editor.putString(k, v); is Long -> editor.putLong(k, v) }
+            }
             for (key in values.keys()) {
                 val typed = values.optJSONObject(key) ?: continue
                 when (typed.optString("t")) {
@@ -309,12 +332,18 @@ class BackupManager(private val context: Context) {
         private const val MAX_SETTINGS_BYTES = 1024 * 1024
         private const val MAX_IMAGE_BYTES = 20L * 1024 * 1024
         private const val IMAGES_BEFORE_RESTORE = "chat_images.before-restore"
+        private const val LIBRARY_BEFORE_RESTORE = "library.before-restore"
+        /** Reminder settings that describe this phone, not the user's choices: never copied between phones. */
+        private val PHONE_ONLY_REMINDER_KEYS = setOf("last_handled_at", "channel_id", "custom_sound")
         private const val PENDING_SAVE_PREFIX = "aura_backup_ready"
 
         /** Removes encrypted backups left in the cache by a save that was interrupted. */
         fun clearPendingSaves(context: Context) {
             context.cacheDir.listFiles { f -> f.name.startsWith(PENDING_SAVE_PREFIX) }?.forEach { it.delete() }
         }
+
+        private fun libraryPictures(dir: File): List<File> =
+            dir.listFiles()?.filter { MediaLibrary.isValidName(it.name) && !MediaLibrary.isVideoName(it.name) } ?: emptyList()
 
         private fun removeSqliteSideFiles(database: File) {
             for (suffix in listOf("-journal", "-wal", "-shm")) File(database.path + suffix).delete()
@@ -361,6 +390,7 @@ class BackupManager(private val context: Context) {
             File(previous.path + "-wal").delete()
             File(previous.path + "-shm").delete()
             File(context.filesDir, IMAGES_BEFORE_RESTORE).deleteRecursively()
+            File(context.filesDir, LIBRARY_BEFORE_RESTORE).deleteRecursively()
         }
 
         /** Relaunches Aura so every screen reopens the restored data. */

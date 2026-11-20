@@ -1,9 +1,12 @@
 // Image and video creation with OpenAI, for the Aura relay. The OpenAI key stays here, like the
 // Anthropic key; the app only ever talks to the relay.
 //
-// POST /v1/image                 body: { "prompt": "...", "shape": "square" | "landscape" | "portrait" }
-//                                response: { "image": "<base64 JPEG>", "mediaType": "image/jpeg" }
-// POST /v1/video                 body: { "prompt": "...", "seconds": "4" | "8" | "12", "shape": "portrait" | "landscape" }
+// POST /v1/image                 body: { "prompt": "...", "shape": "square" | "landscape" | "portrait", "sticker": false }
+//                                response: { "image": "<base64>", "mediaType": "image/jpeg" | "image/png" }
+// POST /v1/image/edit            body: { "prompt": "...", "image": "<base64>", "imageType": "image/jpeg" | "image/png", "sticker": false }
+//                                response: as /v1/image
+// POST /v1/video                 body: { "prompt": "...", "seconds": "4" | "8" | "12", "shape": "portrait" | "landscape",
+//                                        optional "image": "<base64>", "imageType": "...": the first frame, sized to the video }
 //                                response: { "id": "...", "ticket": "...", "status": "...", "progress": 0 }
 // GET  /v1/video/status?id=&ticket=   response: { "status": "...", "progress": 0-100, "error": "..." }
 // GET  /v1/video/content?id=&ticket=  response: the MP4
@@ -34,6 +37,13 @@ export const IMAGE_SIZES = { square: "1024x1024", landscape: "1536x1024", portra
 export const VIDEO_SIZES = { portrait: "720x1280", landscape: "1280x720" };
 export const VIDEO_SECONDS = ["4", "8", "12"];
 const VIDEO_ID = /^[A-Za-z0-9_-]{1,128}$/;
+// Images sent to be edited, or as a video's first frame. The app sends them already shrunk.
+export const MAX_INPUT_IMAGE_BASE64_CHARS = 8_000_000;
+const INPUT_IMAGE_TYPES = { "image/jpeg": "jpg", "image/png": "png" };
+const BASE64_DATA = /^[A-Za-z0-9+/]+={0,2}$/;
+// Added to every sticker request, so the result works as a sticker.
+export const STICKER_STYLE =
+  "Make it a die-cut sticker: the subject alone, with a thick white outline, on a fully transparent background, no shadow or scenery.";
 
 // Tools Claude may use to ask for an image or a video. Defined here, never taken from the app. The
 // call only describes what to make: the app creates an image straight away and asks the user before
@@ -50,6 +60,11 @@ export const MEDIA_TOOLS = [
       properties: {
         prompt: { type: "string", maxLength: MAX_MEDIA_PROMPT_CHARS, description: "What the image shows, its style, composition and mood." },
         shape: { type: "string", enum: Object.keys(IMAGE_SIZES), description: "The image's shape." },
+        from_attached_image: {
+          type: "boolean",
+          description: "True to edit or restyle the picture the user attached to this message instead of starting from nothing.",
+        },
+        sticker: { type: "boolean", description: "True when the user wants a sticker (transparent background, white outline)." },
       },
       required: ["prompt", "shape"],
       additionalProperties: false,
@@ -67,6 +82,10 @@ export const MEDIA_TOOLS = [
         prompt: { type: "string", maxLength: MAX_MEDIA_PROMPT_CHARS, description: "The shot: subject, action, setting, camera, lighting, sound." },
         seconds: { type: "string", enum: VIDEO_SECONDS, description: "Length in seconds; 4 unless the user wants longer." },
         shape: { type: "string", enum: Object.keys(VIDEO_SIZES), description: "Portrait for phones, landscape for wide scenes." },
+        from_attached_image: {
+          type: "boolean",
+          description: "True to start the video from the picture the user attached to this message (it becomes the first frame).",
+        },
       },
       required: ["prompt", "seconds", "shape"],
       additionalProperties: false,
@@ -105,7 +124,21 @@ export function validateImageBody(body) {
   const prompt = cleanPrompt(body);
   const shape = body?.shape ?? "square";
   if (!(shape in IMAGE_SIZES)) throw new MediaError(400, "invalid_request", "shape must be square, landscape or portrait.");
-  return { prompt, size: IMAGE_SIZES[shape] };
+  return { prompt, size: IMAGE_SIZES[shape], sticker: body?.sticker === true };
+}
+
+/** An image sent with a request: base64 JPEG or PNG, within the size limit. Returns a Blob and a file name. */
+export function inputImage(body, required) {
+  if (body?.image === undefined && !required) return null;
+  const data = body?.image;
+  const ext = INPUT_IMAGE_TYPES[body?.imageType];
+  if (typeof data !== "string" || !ext) throw new MediaError(400, "invalid_request", "image must be base64 JPEG or PNG, with imageType.");
+  if (data.length > MAX_INPUT_IMAGE_BASE64_CHARS) throw new MediaError(413, "request_too_large", "The image is too large.");
+  if (data.length === 0 || data.length % 4 !== 0 || !BASE64_DATA.test(data)) throw new MediaError(400, "invalid_request", "The image isn't valid base64.");
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return { blob: new Blob([bytes], { type: body.imageType }), fileName: `image.${ext}` };
 }
 
 export function validateVideoBody(body, maxSeconds) {
@@ -173,38 +206,54 @@ export async function handleMedia({ request, url, env, uid, fetchImpl, limit }) 
   const path = url.pathname;
 
   if (path === "/v1/image" && request.method === "POST") {
-    const { prompt, size } = validateImageBody(await readJson(request));
+    const { prompt, size, sticker } = validateImageBody(await readJson(request));
     await limit("image", Number(env.DAILY_IMAGE_LIMIT) || DEFAULT_DAILY_IMAGE_LIMIT);
-    const quality = IMAGE_QUALITIES.includes(env.OPENAI_IMAGE_QUALITY) ? env.OPENAI_IMAGE_QUALITY : DEFAULT_IMAGE_QUALITY;
     const res = await fetchImpl(`${OPENAI_URL}/images/generations`, {
       method: "POST",
       headers: { ...auth, "content-type": "application/json" },
       body: JSON.stringify({
         model: env.OPENAI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL,
-        prompt,
+        prompt: sticker ? `${prompt}\n\n${STICKER_STYLE}` : prompt,
         n: 1,
-        size,
-        quality,
-        output_format: "jpeg",
-        output_compression: 90,
+        size: sticker ? IMAGE_SIZES.square : size,
+        quality: imageQuality(env),
+        ...outputFormat(sticker),
         safety_identifier: await safetyIdentifier(uid),
       }),
     });
-    if (!res.ok) throw await upstreamError(res, "image");
-    const out = await res.json();
-    const image = out?.data?.[0]?.b64_json;
-    if (typeof image !== "string" || !image) throw new MediaError(502, "media_upstream_error", "OpenAI returned no image.");
-    return jsonResponse(200, { image, mediaType: "image/jpeg" });
+    return imageResult(res, sticker);
+  }
+
+  if (path === "/v1/image/edit" && request.method === "POST") {
+    const body = await readJson(request);
+    const prompt = cleanPrompt(body);
+    const image = inputImage(body, true);
+    const sticker = body?.sticker === true;
+    await limit("image", Number(env.DAILY_IMAGE_LIMIT) || DEFAULT_DAILY_IMAGE_LIMIT);
+    const form = new FormData();
+    form.append("image", image.blob, image.fileName);
+    form.append("prompt", sticker ? `${prompt}\n\n${STICKER_STYLE}` : prompt);
+    form.append("model", env.OPENAI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL);
+    form.append("n", "1");
+    form.append("quality", imageQuality(env));
+    for (const [k, v] of Object.entries(outputFormat(sticker))) form.append(k, String(v));
+    form.append("safety_identifier", await safetyIdentifier(uid));
+    const res = await fetchImpl(`${OPENAI_URL}/images/edits`, { method: "POST", headers: auth, body: form });
+    return imageResult(res, sticker);
   }
 
   if (path === "/v1/video" && request.method === "POST") {
-    const { prompt, seconds, size } = validateVideoBody(await readJson(request), videoMaxSeconds(env));
+    const body = await readJson(request);
+    const { prompt, seconds, size } = validateVideoBody(body, videoMaxSeconds(env));
+    inputImage(body, false); // checked before anything is counted or sent
     await limit("video", Number(env.DAILY_VIDEO_LIMIT) || DEFAULT_DAILY_VIDEO_LIMIT);
     const form = new FormData();
     form.append("prompt", prompt);
     form.append("model", env.OPENAI_VIDEO_MODEL || DEFAULT_VIDEO_MODEL);
     form.append("seconds", seconds);
     form.append("size", size);
+    const reference = inputImage(body, false);
+    if (reference) form.append("input_reference", reference.blob, reference.fileName);
     const res = await fetchImpl(`${OPENAI_URL}/videos`, { method: "POST", headers: auth, body: form });
     if (!res.ok) throw await upstreamError(res, "video");
     const video = await res.json();
@@ -239,6 +288,23 @@ export async function handleMedia({ request, url, env, uid, fetchImpl, limit }) 
   throw new MediaError(405, "method_not_allowed", "Wrong method for this endpoint.");
 }
 
+function imageQuality(env) {
+  return IMAGE_QUALITIES.includes(env.OPENAI_IMAGE_QUALITY) ? env.OPENAI_IMAGE_QUALITY : DEFAULT_IMAGE_QUALITY;
+}
+
+/** Photos come back as JPEG; stickers as PNG with a transparent background. */
+function outputFormat(sticker) {
+  return sticker ? { output_format: "png", background: "transparent" } : { output_format: "jpeg", output_compression: 90 };
+}
+
+async function imageResult(res, sticker) {
+  if (!res.ok) throw await upstreamError(res, "image");
+  const out = await res.json();
+  const image = out?.data?.[0]?.b64_json;
+  if (typeof image !== "string" || !image) throw new MediaError(502, "media_upstream_error", "OpenAI returned no image.");
+  return jsonResponse(200, { image, mediaType: sticker ? "image/png" : "image/jpeg" });
+}
+
 async function readJson(request) {
   try {
     return await request.json();
@@ -247,4 +313,4 @@ async function readJson(request) {
   }
 }
 
-export const MEDIA_PATHS = ["/v1/image", "/v1/video", "/v1/video/status", "/v1/video/content"];
+export const MEDIA_PATHS = ["/v1/image", "/v1/image/edit", "/v1/video", "/v1/video/status", "/v1/video/content"];

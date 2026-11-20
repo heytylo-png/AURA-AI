@@ -731,3 +731,70 @@ test("media: Claude gets the creation tools only when the app asks and the relay
   assert.equal(withWeb.sent.tool_choice, undefined);
   assert.equal((await chatWith({ media: "yes" }, { OPENAI_API_KEY: "k" })).res.status, 400);
 });
+
+test("media: a sticker is a transparent PNG; plain images stay JPEG", async () => {
+  const done = await media("/v1/image", {
+    body: { prompt: "a happy cactus", sticker: true, shape: "landscape" },
+    openai: () => new Response(JSON.stringify({ data: [{ b64_json: "iVBO" }] })),
+  });
+  assert.deepEqual(await done.res.json(), { image: "iVBO", mediaType: "image/png" });
+  const sent = JSON.parse(done.sent[0].init.body);
+  assert.equal(sent.output_format, "png");
+  assert.equal(sent.background, "transparent");
+  assert.equal(sent.size, "1024x1024");
+  assert.match(sent.prompt, /^a happy cactus\n\n.*die-cut sticker/s);
+  assert.equal(sent.output_compression, undefined);
+});
+
+test("media: an image is edited from the user's picture; bad pictures are refused first", async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]).toString("base64");
+  const done = await media("/v1/image/edit", {
+    body: { prompt: "make it a watercolor", image: jpeg, imageType: "image/jpeg", model: "dall-e-2" },
+    openai: () => new Response(JSON.stringify({ data: [{ b64_json: "AAAA" }] })),
+  });
+  assert.equal(done.res.status, 200);
+  assert.deepEqual(await done.res.json(), { image: "AAAA", mediaType: "image/jpeg" });
+  assert.equal(done.sent[0].url, "https://api.openai.com/v1/images/edits");
+  const form = done.sent[0].init.body;
+  assert.equal(form.get("model"), "gpt-image-2");
+  assert.equal(form.get("prompt"), "make it a watercolor");
+  assert.equal(form.get("output_format"), "jpeg");
+  const image = form.get("image");
+  assert.equal(image.type, "image/jpeg");
+  assert.deepEqual([...new Uint8Array(await image.arrayBuffer())], [0xff, 0xd8, 0xff, 0xe0, 1, 2]);
+
+  const sticker = await media("/v1/image/edit", {
+    body: { prompt: "my dog", image: jpeg, imageType: "image/jpeg", sticker: true },
+    openai: () => new Response(JSON.stringify({ data: [{ b64_json: "iVBO" }] })),
+  });
+  assert.equal((await sticker.res.json()).mediaType, "image/png");
+  assert.equal(sticker.sent[0].init.body.get("background"), "transparent");
+
+  for (const body of [
+    { prompt: "x" },
+    { prompt: "x", image: jpeg, imageType: "image/gif" },
+    { prompt: "x", image: "not base64!", imageType: "image/png" },
+    { prompt: "x", image: "A".repeat(8_000_004), imageType: "image/png" },
+  ]) {
+    const r = await media("/v1/image/edit", { body });
+    assert.ok(r.res.status === 400 || r.res.status === 413);
+    assert.equal(r.sent.length, 0);
+  }
+});
+
+test("media: a video can start from the user's picture", async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 9]).toString("base64");
+  const done = await media("/v1/video", {
+    body: { prompt: "the dog runs", seconds: "4", shape: "portrait", image: jpeg, imageType: "image/jpeg" },
+    openai: () => new Response(JSON.stringify({ id: "video_7", status: "queued" })),
+  });
+  assert.equal(done.res.status, 200);
+  const ref = done.sent[0].init.body.get("input_reference");
+  assert.equal(ref.type, "image/jpeg");
+  assert.equal(ref.size, 3);
+  const bad = await media("/v1/video", { body: { prompt: "x", image: jpeg, imageType: "text/plain" } });
+  assert.equal(bad.res.status, 400);
+  assert.equal(bad.sent.length, 0);
+  const plain = await media("/v1/video", { body: { prompt: "x" }, openai: () => new Response(JSON.stringify({ id: "video_8", status: "queued" })) });
+  assert.equal(plain.sent[0].init.body.get("input_reference"), null);
+});
