@@ -36,7 +36,9 @@ object AuraPrompt {
         /** Claude has the tool for opening links in this conversation (the user's switch, and a link is present). */
         linkReading: Boolean = false,
         /** Claude may ask for an image or a video to be created (the user's switch). */
-        media: Boolean = false
+        media: Boolean = false,
+        /** The newest message has attachments Claude can save to the library (save_to_library). */
+        librarySave: Boolean = false
     ): String = buildString {
         appendLine("You are ${identity.name}, a personal AI assistant running in the user's Android app.")
         appendLine("Personality: ${identity.archetype.title}. ${identity.archetype.traitPrompt}")
@@ -104,6 +106,18 @@ object AuraPrompt {
             appendLine(
                 "You can't create images or videos here. If the user asks for one, say that they can turn on " +
                     "\"Let Claude create images and videos\" in Aura's settings."
+            )
+        }
+
+        if (librarySave) {
+            appendLine(
+                "Aura has a library on the user's phone. When the user asks to save, keep or remember the pictures or video they " +
+                    "attached to this message, use save_to_library with the name they give (usually with reference true, so you're " +
+                    "shown those pictures whenever they mention the name). Don't describe the pictures in a memory instead."
+            )
+        } else {
+            appendLine(
+                "If the user asks you to save pictures, tell them to attach the pictures and ask again, or open a picture and tap Library."
             )
         }
 

@@ -27,6 +27,8 @@ data class AiProviderRequest(
     val allowLinkReading: Boolean = false,
     /** The user's "Let Claude create images and videos" switch: Claude may ask for one with a tool. */
     val allowMedia: Boolean = false,
+    /** The user attached pictures or a video: Claude may save them to the library (save_to_library). */
+    val allowLibrarySave: Boolean = false,
     /** Images attached to [prompt]: JPEGs prepared on the phone (see ChatImages), then any video's still frames. */
     val images: List<ByteArray> = emptyList(),
     /** How many of [images], at the end, are still frames from a video (see ChatVideos). */

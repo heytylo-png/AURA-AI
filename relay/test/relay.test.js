@@ -1,7 +1,7 @@
 // Run with: node --test relay/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool, webFetchTool, MAX_IMAGE_BASE64_CHARS, MAX_IMAGES, MAX_TOTAL_IMAGE_BASE64_CHARS } from "../src/index.js";
+import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool, webFetchTool, LIBRARY_TOOL, MAX_IMAGE_BASE64_CHARS, MAX_IMAGES, MAX_TOTAL_IMAGE_BASE64_CHARS } from "../src/index.js";
 
 const PROJECT = "aura-test-project";
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -194,7 +194,7 @@ test("request bodies are validated", () => {
 
   assert.deepEqual(
     validateChatBody({ messages: [{ role: "user", content: "a", extra: 1 }, { role: "assistant", content: "b" }, { role: "user", content: "c" }] }),
-    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], actions: false, web: false, fetch: false, media: false }
+    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], actions: false, web: false, fetch: false, media: false, library: false }
   );
   assert.throws(() => validateChatBody({ messages: [{ role: "user", content: "x" }], actions: "yes" }), RelayError);
 });
@@ -797,4 +797,15 @@ test("media: a video can start from the user's picture", async () => {
   assert.equal(bad.sent.length, 0);
   const plain = await media("/v1/video", { body: { prompt: "x" }, openai: () => new Response(JSON.stringify({ id: "video_8", status: "queued" })) });
   assert.equal(plain.sent[0].init.body.get("input_reference"), null);
+});
+
+test("the save-to-library tool is offered only when the app says something was attached", async () => {
+  const off = await chatWith({});
+  assert.equal(off.sent.tools, undefined);
+  const on = await chatWith({ library: true });
+  assert.deepEqual(on.sent.tools, [LIBRARY_TOOL]);
+  assert.deepEqual(on.sent.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+  const withWeb = await chatWith({ library: true, web: true });
+  assert.equal(withWeb.sent.tool_choice, undefined);
+  assert.equal((await chatWith({ library: "yes" })).res.status, 400);
 });

@@ -33,7 +33,9 @@ sealed interface HybridAiState {
         val reasoningRationale: String,
         val proposedAction: TaskActionEntity? = null,
         /** An image or video Claude asked to create in this reply. */
-        val mediaRequest: MediaRequest? = null
+        val mediaRequest: MediaRequest? = null,
+        /** Claude asked to keep this message's attachments in the library. */
+        val librarySave: LibrarySave? = null
     ) : HybridAiState
     data class Error(val message: String) : HybridAiState
 }
@@ -93,6 +95,8 @@ class HybridAiEngine(
         allowLinkReading: Boolean = false,
         /** The user's "Let Claude create images and videos" switch. */
         allowMedia: Boolean = false,
+        /** The message has attachments Claude may save to the library. */
+        allowLibrarySave: Boolean = false,
         /** Images attached to [prompt] (JPEGs, prepared on the phone). Only Claude can read them. */
         images: List<ByteArray> = emptyList(),
         /** How many of [images], at the end, are still frames from a video. */
@@ -199,6 +203,7 @@ class HybridAiEngine(
             allowWebSearch = allowWebSearch,
             allowLinkReading = allowLinkReading,
             allowMedia = allowMedia,
+            allowLibrarySave = allowLibrarySave,
             images = references.map { it.bytes } + images,
             videoFrames = videoFrames,
             referenceLabels = references.map { it.label },
@@ -238,9 +243,11 @@ class HybridAiEngine(
             done != null -> {
                 // Never keyword-scanned cards under a cloud reply (audit SEC-07 / FB-06). The only card is
                 // one Claude itself proposed with a relay tool, after every field passed the phone's checks.
+                val save = done.toolCall?.takeIf { allowLibrarySave }?.let { LibrarySave.fromToolCall(it) }
+                val saveCall = done.toolCall?.takeIf { it.name == LibrarySave.TOOL_NAME }
                 val mediaCall = done.toolCall?.takeIf { it.name in MediaRequest.TOOL_NAMES }
                 val media = mediaCall?.takeIf { allowMedia }?.let { MediaRequest.fromToolCall(it) }
-                val proposal = done.toolCall?.takeIf { allowProposals && mediaCall == null }?.let { CloudProposals.toAction(it, projects) }
+                val proposal = done.toolCall?.takeIf { allowProposals && mediaCall == null && saveCall == null }?.let { CloudProposals.toAction(it, projects) }
                 val card = (proposal as? CloudProposals.Result.Card)?.action
                 val dropped = (proposal as? CloudProposals.Result.Dropped)?.let {
                     " Claude suggested a change, but it was not shown because ${it.problem}."
@@ -249,12 +256,15 @@ class HybridAiEngine(
                     media is MediaRequest.Image -> " Claude asked for an image; its description goes to OpenAI to make it."
                     media is MediaRequest.Video -> " Claude suggested a video; nothing is made unless you confirm, and then its description goes to OpenAI."
                     mediaCall != null -> " Claude asked to create an image or video, but Aura couldn't read the request."
+                    save != null -> " Claude saved what you attached to your library as \u201c${save.label}\u201d" +
+                        (if (save.reference) ", to be shown to Claude when you mention that name." else ".")
                     else -> ""
                 }
                 val body = done.fullText.ifBlank {
                     when {
                         media is MediaRequest.Image -> "Creating that image now."
                         media is MediaRequest.Video -> "I can make that video. It needs your OK first, because videos cost more than images."
+                        save != null -> "Saved to your library as \u201c${save.label}\u201d."
                         card != null -> "I've suggested a change below. Nothing happens unless you approve it."
                         mediaCall != null -> "Claude tried to create an image or video, but Aura couldn't read the request."
                         else -> "Claude suggested a change that Aura couldn't show."
@@ -280,7 +290,8 @@ class HybridAiEngine(
                         reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " +
                             sentSummary(history, providerRequest) + searchSummary(done.webSearches) + linkSummary(done.linksRead) + mediaNote + dropped + cutOffNote,
                         proposedAction = card,
-                        mediaRequest = media
+                        mediaRequest = media,
+                        librarySave = save
                     )
                 )
             }

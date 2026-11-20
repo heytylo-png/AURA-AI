@@ -43,6 +43,27 @@ const CLOCK_SKEW_SECONDS = 60;
 // the user taps Approve on the phone.
 export const MEMORY_CATEGORIES = ["PREFERENCE", "FACT", "GOAL", "CONTEXT", "IDENTITY_RULE"];
 const REASON = { type: "string", maxLength: 300, description: "One short sentence: why this helps the user." };
+// Offered only when the user attached pictures or a video to the newest message ("library": true).
+// It keeps them in Aura's library on the phone under a name; nothing leaves the phone, and only what
+// the user attached to that message can be saved.
+export const LIBRARY_TOOL = {
+  name: "save_to_library",
+  description:
+    "Save the pictures or video the user attached to their newest message in Aura's library on their phone, under a name " +
+    "(for example \"star\" for a character). Use it when the user asks to save, keep or remember what they attached. " +
+    "With reference true, Aura shows you those pictures again whenever the user mentions the name, so you can keep a " +
+    "character or object consistent. Only saves this message's attachments; it can't save anything else.",
+  input_schema: {
+    type: "object",
+    properties: {
+      label: { type: "string", maxLength: 60, description: "The name to save them under, as the user said it." },
+      reference: { type: "boolean", description: "True to show you these pictures when the user mentions the name later (usually what they want)." },
+    },
+    required: ["label", "reference"],
+    additionalProperties: false,
+  },
+};
+
 export const PROPOSAL_TOOLS = [
   {
     name: "propose_save_memory",
@@ -378,8 +399,11 @@ export function validateChatBody(body) {
   if (body.media !== undefined && typeof body.media !== "boolean") {
     throw new RelayError(400, "invalid_request", "media must be true or false.");
   }
+  if (body.library !== undefined && typeof body.library !== "boolean") {
+    throw new RelayError(400, "invalid_request", "library must be true or false.");
+  }
   // Anything else the app sends (model, tools, max_tokens...) is ignored.
-  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true, fetch: body.fetch === true, media: body.media === true };
+  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true, fetch: body.fetch === true, media: body.media === true, library: body.library === true };
 }
 
 export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = {}) {
@@ -516,8 +540,9 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
         ...(chat.fetch ? [webFetchTool(env)] : []),
         // Only offered when the relay can actually create them.
         ...(chat.media && mediaConfigured(env) ? MEDIA_TOOLS : []),
+        ...(chat.library ? [LIBRARY_TOOL] : []),
       ];
-      const oneToolCall = (chat.actions || (chat.media && mediaConfigured(env))) && !chat.web && !chat.fetch;
+      const oneToolCall = (chat.actions || chat.library || (chat.media && mediaConfigured(env))) && !chat.web && !chat.fetch;
 
       const upstream = await fetchImpl(ANTHROPIC_URL, {
         method: "POST",
