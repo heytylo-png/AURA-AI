@@ -31,6 +31,8 @@ data class AiProviderRequest(
     val images: List<ByteArray> = emptyList(),
     /** How many of [images], at the end, are still frames from a video (see ChatVideos). */
     val videoFrames: Int = 0,
+    /** Names of the library references at the start of [images], in order. */
+    val referenceLabels: List<String> = emptyList(),
     /** Said to Claude before [prompt], about what is attached (when the video's frames were taken). */
     val attachmentNote: String? = null,
     /** Open to-dos the user chose to share: titles and due dates only (see [CloudTodos]). */
@@ -57,6 +59,9 @@ object CloudTodos {
         .take(MAX)
         .map { CloudTodo(it.title, it.dueEpochDay?.let { d -> com.example.data.model.TodoRules.formatDue(d) }) }
 }
+
+/** A library picture the user's message mentions by name ("my dog"), sent so Claude knows what they mean. */
+class ReferenceImage(val label: String, val bytes: ByteArray)
 
 /** A web page Claude cited in its reply. */
 data class WebSource(val url: String, val title: String)

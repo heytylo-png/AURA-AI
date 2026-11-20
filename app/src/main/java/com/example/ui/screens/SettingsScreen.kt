@@ -365,6 +365,20 @@ fun SettingsScreen(
                             modifier = Modifier.testTag("reminder_later")
                         ) { Text("+") }
                     }
+                    val customSound by viewModel.customAlertSound.collectAsState()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Sound", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                if (customSound) "Your video's sound" else "The phone's notification sound. To use a video's sound, open the video and tap Alert sound.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (customSound) {
+                            TextButton(onClick = { viewModel.resetAlertSound() }, modifier = Modifier.testTag("reset_alert_sound")) { Text("Use default") }
+                        }
+                    }
                     if (remindersEnabled && !notificationsAllowed) {
                         Spacer(Modifier.height(4.dp))
                         Text(

@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -204,6 +205,41 @@ fun ChatScreen(viewModel: AuraViewModel) {
     var preparingImage by remember { mutableStateOf(false) }
     val roomForImages = com.example.data.model.Attachments.MAX_PICTURES - pendingImages.size
     val roomForVideo = pendingVideo == null
+    var attachMenu by remember { mutableStateOf(false) }
+    // The library: opened from the header to browse, or from the attach menu to pick something to send.
+    var libraryOpen by remember { mutableStateOf(false) }
+    var libraryPicking by remember { mutableStateOf(false) }
+    val libraryItems by viewModel.library.collectAsState()
+    if (libraryOpen || libraryPicking) {
+        com.example.ui.components.MediaLibraryScreen(
+            items = libraryItems,
+            onDismiss = { libraryOpen = false; libraryPicking = false },
+            onUpdate = viewModel::updateLibraryItem,
+            onDelete = viewModel::deleteLibraryItem,
+            onPick = if (libraryPicking) { item ->
+                libraryPicking = false
+                when {
+                    item.isVideo && pendingVideo != null -> viewModel.voiceNotice("One message can have one video.")
+                    !item.isVideo && pendingImages.size >= com.example.data.model.Attachments.MAX_PICTURES ->
+                        viewModel.voiceNotice("One message can have up to ${com.example.data.model.Attachments.MAX_PICTURES} images.")
+                    else -> {
+                        preparingImage = true
+                        coroutineScope.launch {
+                            viewModel.prepareFromLibrary(item)
+                                .onSuccess { prepared ->
+                                    when (prepared) {
+                                        is com.example.data.model.ChatImages.Prepared -> pendingImages = pendingImages + prepared
+                                        is com.example.data.model.ChatVideos.Prepared -> pendingVideo = prepared
+                                    }
+                                }
+                                .onFailure { viewModel.voiceNotice(it.message ?: "Couldn't use that.") }
+                            preparingImage = false
+                        }
+                    }
+                }
+            } else null
+        )
+    }
     // Android's photo picker: shows only what the user picks, so Aura needs no storage permission.
     // It allows picking several at once; the limit is given when it opens.
     val pickMedia = rememberLauncherForActivityResult(PickMediaUpTo()) { uris ->
@@ -377,6 +413,7 @@ fun ChatScreen(viewModel: AuraViewModel) {
                 onExitProjectContext = { viewModel.setActiveProject(null) },
                 onClearChat = { showClearChatDialog = true },
                 onOpenSettings = { viewModel.setShowSettings(true) },
+                onOpenLibrary = { libraryOpen = true },
                 onOpenDrawer = {
                     coroutineScope.launch { drawerState.open() }
                 }
@@ -568,18 +605,33 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(
-                        onClick = {
-                            pickMedia.launch(PickMedia(maxItems = roomForImages + (if (roomForVideo) 1 else 0), videos = roomForVideo, images = roomForImages > 0))
-                        },
-                        enabled = !preparingImage && (roomForImages > 0 || roomForVideo),
-                        modifier = Modifier.testTag("attach_image_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AddPhotoAlternate,
-                            contentDescription = "Attach images or a video",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Box {
+                        IconButton(
+                            onClick = { attachMenu = true },
+                            enabled = !preparingImage && (roomForImages > 0 || roomForVideo),
+                            modifier = Modifier.testTag("attach_image_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AddPhotoAlternate,
+                                contentDescription = "Attach images or a video",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Photos and videos") },
+                                onClick = {
+                                    attachMenu = false
+                                    pickMedia.launch(PickMedia(maxItems = roomForImages + (if (roomForVideo) 1 else 0), videos = roomForVideo, images = roomForImages > 0))
+                                },
+                                modifier = Modifier.testTag("attach_from_phone")
+                            )
+                            DropdownMenuItem(
+                                text = { Text("From your library") },
+                                onClick = { attachMenu = false; libraryPicking = true },
+                                modifier = Modifier.testTag("attach_from_library")
+                            )
+                        }
                     }
                     OutlinedTextField(
                         value = inputText,
@@ -704,6 +756,7 @@ fun ChatTopHeader(
     onExitProjectContext: () -> Unit,
     onClearChat: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenLibrary: () -> Unit = {},
     onOpenDrawer: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -801,6 +854,19 @@ fun ChatTopHeader(
                 }
 
                 Spacer(Modifier.width(4.dp))
+
+                // The saved pictures, stickers and videos.
+                IconButton(
+                    onClick = onOpenLibrary,
+                    modifier = Modifier.size(38.dp).testTag("open_library_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PhotoLibrary,
+                        contentDescription = "Your library",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
 
                 // Settings Button
                 IconButton(
@@ -1278,8 +1344,8 @@ private fun MessageImages(names: List<String>) {
         }
         videos.forEach { name -> MessageVideo(name, onPlay = { playing = name }) }
     }
-    open?.let { name -> ImageViewer(name, onClose = { open = null }) }
-    playing?.let { name -> VideoPlayer(name, onClose = { playing = null }) }
+    open?.let { name -> com.example.ui.components.MediaViewer(name, onClose = { open = null }) }
+    playing?.let { name -> com.example.ui.components.MediaViewer(name, onClose = { playing = null }) }
 }
 
 /** One image the user sent, loaded small from Aura's private storage. */
@@ -1362,79 +1428,3 @@ private fun MessageVideo(name: String, onPlay: () -> Unit) {
     }
 }
 
-/** Plays a stored video full screen, with the phone's play, pause and seek controls. */
-@Composable
-private fun VideoPlayer(name: String, onClose: () -> Unit) {
-    val context = LocalContext.current
-    val file = remember(name) { com.example.data.model.ChatVideos.file(context, name) }
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onClose,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).testTag("video_player"),
-            contentAlignment = Alignment.Center
-        ) {
-            if (file == null) {
-                Text("This video is no longer on this phone.", color = androidx.compose.ui.graphics.Color.White)
-            } else {
-                androidx.compose.ui.viewinterop.AndroidView(
-                    factory = { ctx ->
-                        android.widget.VideoView(ctx).apply {
-                            val controls = android.widget.MediaController(ctx)
-                            controls.setAnchorView(this)
-                            setMediaController(controls)
-                            setVideoURI(android.net.Uri.fromFile(file))
-                            setOnPreparedListener { start(); controls.show(3000) }
-                            setOnErrorListener { _, _, _ -> true }
-                        }
-                    },
-                    onRelease = { it.stopPlayback() },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).testTag("close_video_player")
-            ) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = androidx.compose.ui.graphics.Color.White)
-            }
-        }
-    }
-}
-
-/** An image shown full screen, as large as it was stored. */
-@Composable
-private fun ImageViewer(name: String, onClose: () -> Unit) {
-    val context = LocalContext.current
-    val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, name) {
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            com.example.data.model.ChatImages.file(context, name)
-                ?.let { com.example.data.model.ChatImages.thumbnail(it, 2048) }?.asImageBitmap()
-        }
-    }
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onClose,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).testTag("image_viewer"),
-            contentAlignment = Alignment.Center
-        ) {
-            bitmap?.let {
-                androidx.compose.foundation.Image(
-                    bitmap = it,
-                    contentDescription = "Image",
-                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).testTag("close_image_viewer")
-            ) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = androidx.compose.ui.graphics.Color.White)
-            }
-        }
-    }
-}

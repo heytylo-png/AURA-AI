@@ -95,6 +95,8 @@ object AuraPrompt {
                 "When the user asks you to make, draw or generate a picture, use the generate_image tool; for a video clip, use " +
                     "generate_video. Write a detailed description in English. It goes to OpenAI's image or video model, so leave out the " +
                     "user's personal details unless the picture is meant to show them. In your text, say briefly what you're creating. " +
+                    "To change a picture the user attached to this message (restyle it, add or remove something), set " +
+                    "from_attached_image; for a video that starts from their picture, set it on generate_video. For a sticker, set sticker. " +
                     "Images are made right away; a video is made only after the user confirms. Never claim it is already finished. " +
                     "If the user doesn't ask for an image or video, don't make one."
             )

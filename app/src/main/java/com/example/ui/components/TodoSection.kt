@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
@@ -67,7 +68,9 @@ fun LazyListScope.todoItems(
     onEdit: (TodoEntity) -> Unit,
     onDelete: (TodoEntity) -> Unit,
     onRestore: (TodoEntity) -> Unit,
-    onDeleteForever: (TodoEntity) -> Unit
+    onDeleteForever: (TodoEntity) -> Unit,
+    /** Add, view or remove the to-do's picture. */
+    onPicture: (TodoEntity) -> Unit = {}
 ) {
     val open = visible.filter { !it.done }.sortedWith(TodoRules.openOrder)
     val done = visible.filter { it.done }.sortedByDescending { it.doneAt ?: 0 }
@@ -85,12 +88,12 @@ fun LazyListScope.todoItems(
         }
     }
     items(open, key = { "todo-${it.id}" }) { todo ->
-        TodoRow(todo, projectName(todo.projectId), today, onToggle, onEdit, onDelete)
+        TodoRow(todo, projectName(todo.projectId), today, onToggle, onEdit, onDelete, onPicture)
     }
     if (done.isNotEmpty()) {
         item(key = "todo-done-toggle") { Collapser("Done", done.size, showDone, onShowDone, "todo_done_toggle") }
         if (showDone) items(done, key = { "todo-${it.id}" }) { todo ->
-            TodoRow(todo, projectName(todo.projectId), today, onToggle, onEdit, onDelete)
+            TodoRow(todo, projectName(todo.projectId), today, onToggle, onEdit, onDelete, onPicture)
         }
     }
     if (deleted.isNotEmpty()) {
@@ -141,7 +144,8 @@ private fun TodoRow(
     today: Long,
     onToggle: (TodoEntity) -> Unit,
     onEdit: (TodoEntity) -> Unit,
-    onDelete: (TodoEntity) -> Unit
+    onDelete: (TodoEntity) -> Unit,
+    onPicture: (TodoEntity) -> Unit
 ) {
     val overdue = TodoRules.isOverdue(todo, today)
     Card(
@@ -176,6 +180,19 @@ private fun TodoRow(
                         color = if (overdue) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
                         fontWeight = if (overdue) FontWeight.SemiBold else null
                     )
+                }
+            }
+            val picture = todo.imageName
+            if (picture != null) {
+                MediaThumbnail(
+                    picture,
+                    Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).clickable(onClickLabel = "Picture") { onPicture(todo) }
+                        .testTag("todo_picture_${todo.id}"),
+                    maxEdge = 160
+                )
+            } else if (!todo.done) {
+                IconButton(onClick = { onPicture(todo) }, modifier = Modifier.testTag("todo_add_picture_${todo.id}")) {
+                    Icon(Icons.Default.AddPhotoAlternate, contentDescription = "Add a picture", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                 }
             }
             IconButton(onClick = { onDelete(todo) }, modifier = Modifier.testTag("todo_delete_${todo.id}")) {

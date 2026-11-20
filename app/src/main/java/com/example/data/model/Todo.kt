@@ -21,7 +21,9 @@ data class TodoEntity(
     val source: TodoSource? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long? = null,
-    val deletedAt: Long? = null
+    val deletedAt: Long? = null,
+    /** A picture from the library shown with this to-do and in its reminder (see [MediaLibrary]); null when none. */
+    val imageName: String? = null
 )
 
 enum class TodoSource(val label: String) {

@@ -70,6 +70,72 @@ fun TasksScreen(viewModel: AuraViewModel) {
     var showDone by remember { mutableStateOf(false) }
     var showDeleted by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<TodoEntity?>(null) }
+    // A to-do's picture: shown in the list and in its reminder.
+    var pictureFor by remember { mutableStateOf<TodoEntity?>(null) }
+    var pickingFromLibrary by remember { mutableStateOf<TodoEntity?>(null) }
+    var viewingPicture by remember { mutableStateOf<String?>(null) }
+    var pickingFromPhoneFor by remember { mutableStateOf<TodoEntity?>(null) }
+    val libraryItems by viewModel.library.collectAsState()
+    val pickFromPhone = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        val todo = pickingFromPhoneFor
+        pickingFromPhoneFor = null
+        if (uri != null && todo != null) viewModel.setTodoImageFromPhone(todo, uri)
+    }
+    pictureFor?.let { todo ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pictureFor = null },
+            title = { Text(if (todo.imageName == null) "Add a picture" else "Picture") },
+            text = {
+                Text(
+                    "The picture shows with \"${todo.title.take(60)}\" and in its reminder (not on the lock screen).",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Column(horizontalAlignment = Alignment.End) {
+                    if (todo.imageName != null) {
+                        androidx.compose.material3.TextButton(onClick = { viewingPicture = todo.imageName; pictureFor = null }) { Text("View") }
+                    }
+                    androidx.compose.material3.TextButton(
+                        onClick = { pickingFromLibrary = todo; pictureFor = null },
+                        modifier = Modifier.testTag("todo_picture_library")
+                    ) { Text("From your library") }
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            pickingFromPhoneFor = todo
+                            pictureFor = null
+                            pickFromPhone.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        },
+                        modifier = Modifier.testTag("todo_picture_phone")
+                    ) { Text("From your phone") }
+                    if (todo.imageName != null) {
+                        androidx.compose.material3.TextButton(onClick = { viewModel.setTodoImage(todo, null); pictureFor = null }) {
+                            Text("Remove picture", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { pictureFor = null }) { Text("Cancel") } }
+        )
+    }
+    pickingFromLibrary?.let { todo ->
+        com.example.ui.components.MediaLibraryScreen(
+            items = libraryItems,
+            onDismiss = { pickingFromLibrary = null },
+            onUpdate = viewModel::updateLibraryItem,
+            onDelete = viewModel::deleteLibraryItem,
+            onPick = { item -> viewModel.setTodoImage(todo, item); pickingFromLibrary = null },
+            picturesOnly = true,
+            title = "Choose a picture"
+        )
+    }
+    viewingPicture?.let { name -> com.example.ui.components.MediaViewer(name, onClose = { viewingPicture = null }) }
     var adding by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -137,6 +203,7 @@ fun TasksScreen(viewModel: AuraViewModel) {
                 onShowDeleted = { showDeleted = it },
                 onToggle = { viewModel.toggleTodoDone(it) },
                 onEdit = { editing = it },
+                onPicture = { pictureFor = it },
                 onDelete = { todo ->
                     viewModel.deleteTodo(todo)
                     scope.launch {

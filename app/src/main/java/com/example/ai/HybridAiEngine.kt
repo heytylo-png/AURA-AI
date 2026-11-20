@@ -98,7 +98,12 @@ class HybridAiEngine(
         /** How many of [images], at the end, are still frames from a video. */
         videoFrames: Int = 0,
         /** Said to Claude before [prompt], about the attachments. */
-        attachmentNote: String? = null
+        attachmentNote: String? = null,
+        /**
+         * Library pictures the message mentions by name. Sent only if the message goes to Claude anyway;
+         * unlike attachments, they never decide where it goes.
+         */
+        references: List<ReferenceImage> = emptyList()
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
@@ -194,9 +199,10 @@ class HybridAiEngine(
             allowWebSearch = allowWebSearch,
             allowLinkReading = allowLinkReading,
             allowMedia = allowMedia,
-            images = images,
+            images = references.map { it.bytes } + images,
             videoFrames = videoFrames,
-            attachmentNote = attachmentNote
+            referenceLabels = references.map { it.label },
+            attachmentNote = listOfNotNull(referenceNote(references), attachmentNote).joinToString("\n\n").ifEmpty { null }
         ).forCloud(sharePersonalContext).copy(
             openTodos = sharedTodos.take(CloudTodos.MAX),
             openTodosTotal = if (sharedTodos.isEmpty()) 0 else maxOf(sharedTodosTotal, sharedTodos.take(CloudTodos.MAX).size),
@@ -322,7 +328,11 @@ class HybridAiEngine(
                 "this message and the last $earlier earlier Claude exchange${if (earlier == 1) "" else "s"} in this chat",
             "the assistant's name and personality"
         )
-        when (val pictures = sent.images.size - sent.videoFrames) {
+        if (sent.referenceLabels.isNotEmpty()) {
+            parts += "${plural(sent.referenceLabels.size, "saved picture")} from your library that your message mentions (" +
+                sent.referenceLabels.joinToString(", ") { "\u201c$it\u201d" } + ")"
+        }
+        when (val pictures = sent.images.size - sent.videoFrames - sent.referenceLabels.size) {
             0 -> {}
             1 -> parts += "the image you attached (shrunk, with its location and other photo data removed)"
             else -> parts += "the $pictures images you attached (shrunk, with their location and other photo data removed)"
@@ -377,6 +387,15 @@ class HybridAiEngine(
         val shown = queries.take(MAX_QUERIES_SHOWN).joinToString(", ") { "\"$it\"" }
         val more = if (queries.size > MAX_QUERIES_SHOWN) " and ${queries.size - MAX_QUERIES_SHOWN} more" else ""
         return " Claude searched the web ${if (queries.size == 1) "once" else "${queries.size} times"}: $shown$more."
+    }
+
+    /** Tells Claude which of the first images are the user's saved references, and what they're called. */
+    internal fun referenceNote(references: List<ReferenceImage>): String? {
+        if (references.isEmpty()) return null
+        val names = references.mapIndexed { i, r -> "${i + 1}. \u201c${r.label}\u201d" }.joinToString(", ")
+        val which = if (references.size == 1) "The first image is a picture" else "The first ${references.size} images are pictures"
+        return "[$which the user saved in Aura and named: $names. It's shown because the message mentions that name; " +
+            "use it to know what they mean.]"
     }
 
     /** Says which links Claude opened: the page's site was asked for it, through Anthropic. */

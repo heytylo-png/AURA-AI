@@ -43,7 +43,9 @@ the organization in the Claude Console.
 
 Images and videos (`src/media.js`): with `"media": true` (the user's "Let Claude create images and
 videos" switch) and an `OPENAI_API_KEY`, Claude gets two tools, `generate_image` and
-`generate_video`. The app then calls `POST /v1/image` (answered with a JPEG) or `POST /v1/video`
+`generate_video`. The app then calls `POST /v1/image` (answered with a JPEG, or a transparent PNG for a
+sticker), `POST /v1/image/edit` (the same, from a picture the user chose) or `POST /v1/video` (which can
+take a first frame)
 (answered with a job ID and a ticket), then `GET /v1/video/status` and `GET /v1/video/content`. The
 model, quality, size and longest video are set here (`OPENAI_IMAGE_MODEL`, `OPENAI_IMAGE_QUALITY`,
 `OPENAI_VIDEO_MODEL`, `VIDEO_MAX_SECONDS`), not by the app. A ticket is an HMAC of the user and the

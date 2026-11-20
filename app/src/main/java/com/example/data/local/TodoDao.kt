@@ -22,6 +22,10 @@ interface TodoDao {
     @Query("SELECT * FROM todos WHERE deletedAt IS NULL AND done = 0")
     suspend fun getOpen(): List<TodoEntity>
 
+    /** Library pictures attached to to-dos (kept when cleaning up the library). */
+    @Query("SELECT imageName FROM todos WHERE imageName IS NOT NULL")
+    suspend fun imageNamesInUse(): List<String>
+
     @Query("SELECT * FROM todos WHERE id = :id")
     suspend fun getById(id: Long): TodoEntity?
 

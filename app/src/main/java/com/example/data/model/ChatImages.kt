@@ -29,7 +29,8 @@ object ChatImages {
     /** Largest file accepted from the picker (photos from good cameras can be large). */
     const val MAX_INPUT_BYTES = 40L * 1024 * 1024
     private const val DIR = "chat_images"
-    private val NAME = Regex("img_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.jpg")
+    // JPEG for photos; PNG for stickers, which keep their transparent background.
+    private val NAME = Regex("img_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(jpg|png)")
 
     /** A picked image, ready to store and send: JPEG bytes without metadata. */
     class Prepared(val jpeg: ByteArray, val width: Int, val height: Int)
@@ -107,6 +108,26 @@ object ChatImages {
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, true)
     }
 
+    /**
+     * The picture cut to exactly [width] x [height] (centred, filling the frame) as JPEG, for a video's
+     * first frame, which must match the video's size.
+     */
+    fun fitExactly(bytes: ByteArray, width: Int, height: Int): ByteArray {
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: throw IllegalArgumentException("That image couldn't be read.")
+        val upright = rotateUpright(decoded, orientationOf(bytes))
+        val scale = maxOf(width.toFloat() / upright.width, height.toFloat() / upright.height)
+        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        canvas.drawColor(android.graphics.Color.BLACK)
+        val m = Matrix().apply {
+            postScale(scale, scale)
+            postTranslate((width - upright.width * scale) / 2f, (height - upright.height * scale) / 2f)
+        }
+        canvas.drawBitmap(upright, m, android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+        return ByteArrayOutputStream().also { out.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }.toByteArray()
+    }
+
     /** Stores a prepared image; returns the name to keep with the message. */
     fun save(context: Context, image: Prepared): String {
         val name = "img_${UUID.randomUUID()}.jpg"
@@ -116,6 +137,26 @@ object ChatImages {
         if (!partial.renameTo(target)) {
             partial.delete()
             throw IllegalStateException("Couldn't save the image.")
+        }
+        return name
+    }
+
+    /**
+     * Stores a PNG (a sticker) as it is, after checking it decodes and isn't too large; returns the name.
+     */
+    fun savePng(context: Context, png: ByteArray): String {
+        if (png.size > 12 * 1024 * 1024) throw IllegalArgumentException("That sticker is too large.")
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(png, 0, png.size, bounds)
+        val signature = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 0x0D, 0x0A, 0x1A, 0x0A)
+        val isPng = png.size > signature.size && signature.indices.all { png[it] == signature[it] }
+        if (bounds.outWidth <= 0 || !isPng) throw IllegalArgumentException("That isn't a PNG image.")
+        val name = "img_${UUID.randomUUID()}.png"
+        val partial = File(dir(context), "$name.part")
+        partial.writeBytes(png)
+        if (!partial.renameTo(File(dir(context), name))) {
+            partial.delete()
+            throw IllegalStateException("Couldn't save the sticker.")
         }
         return name
     }
