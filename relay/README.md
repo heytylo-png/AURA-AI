@@ -41,10 +41,22 @@ reply (default 3) and 20,000 tokens of text per page. It can open only addresses
 conversation, and costs only the tokens of the text it reads. Web fetch must also be allowed for
 the organization in the Claude Console.
 
+Images and videos (`src/media.js`): with `"media": true` (the user's "Let Claude create images and
+videos" switch) and an `OPENAI_API_KEY`, Claude gets two tools, `generate_image` and
+`generate_video`. The app then calls `POST /v1/image` (answered with a JPEG) or `POST /v1/video`
+(answered with a job ID and a ticket), then `GET /v1/video/status` and `GET /v1/video/content`. The
+model, quality, size and longest video are set here (`OPENAI_IMAGE_MODEL`, `OPENAI_IMAGE_QUALITY`,
+`OPENAI_VIDEO_MODEL`, `VIDEO_MAX_SECONDS`), not by the app. A ticket is an HMAC of the user and the
+video ID, so only the user who started a video can check on it or download it. The daily caps are
+`DAILY_IMAGE_LIMIT` (default 20) and `DAILY_VIDEO_LIMIT` (default 3), and `MEDIA_LIMITER` allows 5
+creations a minute; checking on a video doesn't count toward either. OpenAI is sent a hash of the
+user's ID, never the ID itself, for its abuse monitoring.
+
 Tests: `cd relay && node --test` (no packages needed).
 
 Deployment is automatic from `main` via `.github/workflows/relay.yml` once these
 repository secrets exist: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`,
 `ANTHROPIC_API_KEY`, `AURA_ALLOWED_UIDS`, and the existing `AURA_GOOGLE_SERVICES_JSON`
 (the Firebase project ID is read from it). `ELEVENLABS_API_KEY` is optional; without it
-`/v1/speak` reports that speech isn't configured.
+`/v1/speak` reports that speech isn't configured. `OPENAI_API_KEY` is optional too; without it the
+image and video endpoints report that they aren't configured, and Claude isn't offered the tools.

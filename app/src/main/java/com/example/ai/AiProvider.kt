@@ -25,6 +25,8 @@ data class AiProviderRequest(
     val allowWebSearch: Boolean = false,
     /** The user's "Let Claude open links" switch: Claude may open links that appear in this conversation. */
     val allowLinkReading: Boolean = false,
+    /** The user's "Let Claude create images and videos" switch: Claude may ask for one with a tool. */
+    val allowMedia: Boolean = false,
     /** Images attached to [prompt]: JPEGs prepared on the phone (see ChatImages), then any video's still frames. */
     val images: List<ByteArray> = emptyList(),
     /** How many of [images], at the end, are still frames from a video (see ChatVideos). */

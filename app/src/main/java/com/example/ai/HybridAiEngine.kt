@@ -31,7 +31,9 @@ sealed interface HybridAiState {
         val modelUsed: AiModelUsed,
         val latencyMs: Long,
         val reasoningRationale: String,
-        val proposedAction: TaskActionEntity? = null
+        val proposedAction: TaskActionEntity? = null,
+        /** An image or video Claude asked to create in this reply. */
+        val mediaRequest: MediaRequest? = null
     ) : HybridAiState
     data class Error(val message: String) : HybridAiState
 }
@@ -89,6 +91,8 @@ class HybridAiEngine(
         allowWebSearch: Boolean = false,
         /** The user's "Let Claude open links" switch. */
         allowLinkReading: Boolean = false,
+        /** The user's "Let Claude create images and videos" switch. */
+        allowMedia: Boolean = false,
         /** Images attached to [prompt] (JPEGs, prepared on the phone). Only Claude can read them. */
         images: List<ByteArray> = emptyList(),
         /** How many of [images], at the end, are still frames from a video. */
@@ -189,6 +193,7 @@ class HybridAiEngine(
             allowProposals = allowProposals,
             allowWebSearch = allowWebSearch,
             allowLinkReading = allowLinkReading,
+            allowMedia = allowMedia,
             images = images,
             videoFrames = videoFrames,
             attachmentNote = attachmentNote
@@ -227,14 +232,27 @@ class HybridAiEngine(
             done != null -> {
                 // Never keyword-scanned cards under a cloud reply (audit SEC-07 / FB-06). The only card is
                 // one Claude itself proposed with a relay tool, after every field passed the phone's checks.
-                val proposal = done.toolCall?.takeIf { allowProposals }?.let { CloudProposals.toAction(it, projects) }
+                val mediaCall = done.toolCall?.takeIf { it.name in MediaRequest.TOOL_NAMES }
+                val media = mediaCall?.takeIf { allowMedia }?.let { MediaRequest.fromToolCall(it) }
+                val proposal = done.toolCall?.takeIf { allowProposals && mediaCall == null }?.let { CloudProposals.toAction(it, projects) }
                 val card = (proposal as? CloudProposals.Result.Card)?.action
                 val dropped = (proposal as? CloudProposals.Result.Dropped)?.let {
                     " Claude suggested a change, but it was not shown because ${it.problem}."
                 }.orEmpty()
+                val mediaNote = when {
+                    media is MediaRequest.Image -> " Claude asked for an image; its description goes to OpenAI to make it."
+                    media is MediaRequest.Video -> " Claude suggested a video; nothing is made unless you confirm, and then its description goes to OpenAI."
+                    mediaCall != null -> " Claude asked to create an image or video, but Aura couldn't read the request."
+                    else -> ""
+                }
                 val body = done.fullText.ifBlank {
-                    if (card != null) "I've suggested a change below. Nothing happens unless you approve it."
-                    else "Claude suggested a change that Aura couldn't show."
+                    when {
+                        media is MediaRequest.Image -> "Creating that image now."
+                        media is MediaRequest.Video -> "I can make that video. It needs your OK first, because videos cost more than images."
+                        card != null -> "I've suggested a change below. Nothing happens unless you approve it."
+                        mediaCall != null -> "Claude tried to create an image or video, but Aura couldn't read the request."
+                        else -> "Claude suggested a change that Aura couldn't show."
+                    }
                 }
                 // The relay caps how long a reply may be; say so instead of showing a cut-off answer as whole.
                 val withSources = body + sourcesSection(done.sources)
@@ -254,8 +272,9 @@ class HybridAiEngine(
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
                         reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " +
-                            sentSummary(history, providerRequest) + searchSummary(done.webSearches) + linkSummary(done.linksRead) + dropped + cutOffNote,
-                        proposedAction = card
+                            sentSummary(history, providerRequest) + searchSummary(done.webSearches) + linkSummary(done.linksRead) + mediaNote + dropped + cutOffNote,
+                        proposedAction = card,
+                        mediaRequest = media
                     )
                 )
             }

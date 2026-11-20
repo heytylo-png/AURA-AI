@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -135,6 +136,35 @@ fun ChatScreen(viewModel: AuraViewModel) {
     val actionFailures by viewModel.actionFailures.collectAsState()
     val recentSessions by viewModel.recentSessions.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
+    val mediaStatus by viewModel.mediaStatus.collectAsState()
+    val videoToConfirm by viewModel.videoToConfirm.collectAsState()
+
+    // Claude suggested a video: it's made only if the user confirms, because videos cost much more.
+    videoToConfirm?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { viewModel.declineVideo() },
+            title = { Text("Create this video?") },
+            text = {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(
+                        text = "A ${pending.request.seconds}-second ${pending.request.shape} video, made by OpenAI from Claude's description:\n\n" +
+                            "\u201c${pending.request.prompt}\u201d\n\n" +
+                            "Videos cost much more than images (roughly 10 cents per second of video) and take a few minutes. " +
+                            "The description goes to OpenAI.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmVideo() }, modifier = Modifier.testTag("confirm_video")) { Text("Create video") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.declineVideo() }, modifier = Modifier.testTag("decline_video")) { Text("Not now") }
+            },
+            modifier = Modifier.testTag("video_confirm_dialog")
+        )
+    }
     // A reply being written shows only in the chat it belongs to.
     val isGenerating = anyReplyInProgress && (generatingSessionId == null || generatingSessionId == activeSession?.id)
     val replyingElsewhere = anyReplyInProgress && !isGenerating
@@ -474,6 +504,21 @@ fun ChatScreen(viewModel: AuraViewModel) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 4.dp).testTag("replying_elsewhere_caption")
                     )
+                }
+                mediaStatus?.let { status ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                        Text(
+                            text = status,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp).testTag("media_status")
+                        )
+                        TextButton(onClick = { viewModel.cancelMedia() }, modifier = Modifier.testTag("cancel_media")) { Text("Cancel") }
+                    }
                 }
                 if (voiceCaption != null) {
                     Text(
@@ -885,6 +930,8 @@ fun ChatMessageItem(
             }
             AiReplyLabel(aiName = aiName, modelUsed = message.modelUsed, reasoningExplanation = message.reasoningExplanation)
             Spacer(Modifier.height(8.dp))
+            // An image or video made for the user (see AiModelUsed.MEDIA).
+            MessageImages(message.attachmentNames)
             presentation.notice?.let { notice ->
                 if (presentation.noticeAfterBody) {
                     // Incomplete answer: the text that arrived first, then the warning.
@@ -1249,7 +1296,7 @@ private fun MessageImage(name: String, single: Boolean, onOpen: () -> Unit) {
     if (image != null) {
         androidx.compose.foundation.Image(
             bitmap = image,
-            contentDescription = "Image you sent. Tap to view full screen.",
+            contentDescription = "Image. Tap to view full screen.",
             contentScale = if (single) androidx.compose.ui.layout.ContentScale.Fit else androidx.compose.ui.layout.ContentScale.Crop,
             modifier = (if (single) Modifier.widthIn(max = 260.dp).heightIn(max = 260.dp) else Modifier.size(128.dp))
                 .clip(RoundedCornerShape(10.dp))
@@ -1298,7 +1345,7 @@ private fun MessageVideo(name: String, onPlay: () -> Unit) {
         if (poster != null) {
             androidx.compose.foundation.Image(
                 bitmap = poster,
-                contentDescription = "Video you sent, ${com.example.data.model.ChatVideos.formatTime(duration)} long. Tap to play.",
+                contentDescription = "Video, ${com.example.data.model.ChatVideos.formatTime(duration)} long. Tap to play.",
                 contentScale = androidx.compose.ui.layout.ContentScale.Fit
             )
         }
@@ -1377,7 +1424,7 @@ private fun ImageViewer(name: String, onClose: () -> Unit) {
             bitmap?.let {
                 androidx.compose.foundation.Image(
                     bitmap = it,
-                    contentDescription = "Image you sent",
+                    contentDescription = "Image",
                     contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                     modifier = Modifier.fillMaxSize()
                 )

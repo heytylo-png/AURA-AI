@@ -4,7 +4,9 @@
 //   body: { "system": "...", "messages": [{ "role": "user" | "assistant", "content": "..." }] }
 //   response: Anthropic Messages API server-sent events, passed through unchanged.
 // POST /v1/speak  same sign-in; body: { "text": "..." }; response: MP3 audio from ElevenLabs.
-// GET  /health    no auth; reports only whether chat and speech are configured.
+// POST /v1/image, /v1/video, GET /v1/video/status, /v1/video/content: images and videos made by
+//                 OpenAI, same sign-in (see media.js).
+// GET  /health    no auth; reports only whether chat, speech and media are configured.
 //
 // Only Firebase users listed in ALLOWED_UIDS may call /v1/chat. The model, output limit and
 // request size are fixed here, so a stolen token cannot pick an expensive model or huge outputs.
@@ -21,6 +23,9 @@
 //   WEB_SEARCH_MAX_USES var, default 3: most web searches Claude may run for one reply
 //   WEB_FETCH_MAX_USES  var, default 3: most links Claude may open for one reply
 //   USAGE               optional KV namespace that holds the daily counts
+//   OPENAI_API_KEY and the other media settings: see media.js
+
+import { MEDIA_TOOLS, MEDIA_PATHS, MediaError, handleMedia, mediaConfigured } from "./media.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
@@ -370,8 +375,11 @@ export function validateChatBody(body) {
   if (body.fetch !== undefined && typeof body.fetch !== "boolean") {
     throw new RelayError(400, "invalid_request", "fetch must be true or false.");
   }
+  if (body.media !== undefined && typeof body.media !== "boolean") {
+    throw new RelayError(400, "invalid_request", "media must be true or false.");
+  }
   // Anything else the app sends (model, tools, max_tokens...) is ignored.
-  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true, fetch: body.fetch === true };
+  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true, fetch: body.fetch === true, media: body.media === true };
 }
 
 export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = {}) {
@@ -386,12 +394,14 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
       return json(200, {
         ok: configured,
         speech: Boolean(env.ELEVENLABS_API_KEY && env.ELEVENLABS_API_KEY !== "not-set" && env.ELEVENLABS_VOICE_ID),
+        media: mediaConfigured(env),
       });
     }
-    if (url.pathname !== "/v1/chat" && url.pathname !== "/v1/speak") {
+    const isMedia = MEDIA_PATHS.includes(url.pathname);
+    if (url.pathname !== "/v1/chat" && url.pathname !== "/v1/speak" && !isMedia) {
       return json(404, { error: { type: "not_found", message: "Not found." } });
     }
-    if (request.method !== "POST") return json(405, { error: { type: "method_not_allowed", message: "Use POST." } });
+    if (request.method !== "POST" && !isMedia) return json(405, { error: { type: "method_not_allowed", message: "Use POST." } });
 
     // Same sign-in and allowlist for every endpoint.
     async function authorize() {
@@ -412,6 +422,20 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
       }
       if (!(await withinDailyLimit(env.USAGE, kind, uid, dailyLimit, now()))) {
         throw new RelayError(429, "daily_limit", `Today's limit of ${dailyLimit} ${kind} requests is used up. It resets at midnight UTC.`);
+      }
+    }
+
+    if (isMedia) {
+      try {
+        const uid = await authorize();
+        return await handleMedia({
+          request, url, env, uid, fetchImpl,
+          // Only creating counts: checking on a video or downloading it costs nothing.
+          limit: (kind, daily) => checkLimit(env.MEDIA_LIMITER, uid, kind, daily),
+        });
+      } catch (e) {
+        if (e instanceof RelayError || e instanceof MediaError) return errorResponse(e);
+        return errorResponse(new RelayError(500, "relay_error", "The relay failed unexpectedly."));
       }
     }
 
@@ -490,7 +514,10 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
         ...(chat.actions ? PROPOSAL_TOOLS : []),
         ...(chat.web ? [webSearchTool(env)] : []),
         ...(chat.fetch ? [webFetchTool(env)] : []),
+        // Only offered when the relay can actually create them.
+        ...(chat.media && mediaConfigured(env) ? MEDIA_TOOLS : []),
       ];
+      const oneToolCall = (chat.actions || (chat.media && mediaConfigured(env))) && !chat.web && !chat.fetch;
 
       const upstream = await fetchImpl(ANTHROPIC_URL, {
         method: "POST",
@@ -505,10 +532,10 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
           ...(chat.system ? { system: chat.system } : {}),
           messages: chat.messages,
           ...(tools.length ? { tools } : {}),
-          // At most one proposal per reply. The Claude API refuses disable_parallel_tool_use together
+          // At most one proposal or creation per reply. The Claude API refuses disable_parallel_tool_use together
           // with web search or web fetch (their result filtering uses programmatic tool calling), so with
           // either on it is left out; the app still keeps only the first proposal in a reply.
-          ...(chat.actions && !chat.web && !chat.fetch ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
+          ...(oneToolCall ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
           stream: true,
         }),
       });

@@ -200,6 +200,139 @@ class AuraViewModel @JvmOverloads constructor(
         _linkReading.value = enabled
     }
 
+    // Off by default: Claude may ask OpenAI's models for an image (made straight away) or a video
+    // (made only after the user confirms). Claude's description of it goes to OpenAI through the relay.
+    private val _mediaGeneration = MutableStateFlow(privacyPrefs.getBoolean("media_generation_enabled", false))
+    val mediaGeneration: StateFlow<Boolean> = _mediaGeneration.asStateFlow()
+
+    fun setMediaGeneration(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("media_generation_enabled", enabled).apply()
+        _mediaGeneration.value = enabled
+    }
+
+    /** A video Claude suggested, waiting for the user to confirm it (videos cost much more than images). */
+    data class VideoToConfirm(val request: com.example.ai.MediaRequest.Video, val sessionId: Long, val projectId: Long?)
+
+    private val _videoToConfirm = MutableStateFlow<VideoToConfirm?>(null)
+    val videoToConfirm: StateFlow<VideoToConfirm?> = _videoToConfirm.asStateFlow()
+
+    /** What's being created right now ("Creating an image…", "Creating a video… 40%"), or null. */
+    private val _mediaStatus = MutableStateFlow<String?>(null)
+    val mediaStatus: StateFlow<String?> = _mediaStatus.asStateFlow()
+    private var mediaJob: kotlinx.coroutines.Job? = null
+
+    private val relayMedia by lazy { com.example.ai.RelayMedia(BuildConfig.AURA_RELAY_URL, relayAuth) }
+
+    private fun onMediaRequested(request: com.example.ai.MediaRequest, sessionId: Long, projectId: Long?) {
+        when (request) {
+            is com.example.ai.MediaRequest.Image -> createImage(request, sessionId, projectId)
+            is com.example.ai.MediaRequest.Video -> _videoToConfirm.value = VideoToConfirm(request, sessionId, projectId)
+        }
+    }
+
+    fun declineVideo() {
+        _videoToConfirm.value = null
+    }
+
+    fun confirmVideo() {
+        val pending = _videoToConfirm.value ?: return
+        _videoToConfirm.value = null
+        createVideo(pending.request, pending.sessionId, pending.projectId)
+    }
+
+    /** Stops waiting for an image or video. (A video OpenAI already started is still billed.) */
+    fun cancelMedia() {
+        mediaJob?.cancel()
+    }
+
+    private fun startMediaJob(block: suspend () -> Unit): Boolean {
+        if (mediaJob?.isActive == true) {
+            voiceNotice("Something is already being created. Wait for it to finish, or cancel it.")
+            return false
+        }
+        mediaJob = viewModelScope.launch {
+            try {
+                block()
+            } finally {
+                _mediaStatus.value = null
+            }
+        }
+        return true
+    }
+
+    private suspend fun insertMediaMessage(sessionId: Long, projectId: Long?, text: String, details: String, attachment: String? = null) {
+        chatRepository.insertMessage(
+            ChatMessageEntity(
+                sender = Sender.AI,
+                text = text,
+                modelUsed = if (attachment != null) AiModelUsed.MEDIA else AiModelUsed.NONE,
+                reasoningExplanation = details,
+                associatedProjectId = projectId,
+                sessionId = sessionId,
+                imageName = attachment
+            )
+        )
+    }
+
+    private fun createImage(request: com.example.ai.MediaRequest.Image, sessionId: Long, projectId: Long?) {
+        startMediaJob {
+            _mediaStatus.value = "Creating an image with OpenAI\u2026"
+            val details = "Made by OpenAI's image model through your Aura relay, from Claude's description: \u201c${request.prompt}\u201d"
+            relayMedia.generateImage(request.prompt, request.shape)
+                .mapCatching { bytes ->
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.example.data.model.ChatImages.save(getApplication(), com.example.data.model.ChatImages.prepare(bytes))
+                    }
+                }
+                .onSuccess { name -> insertMediaMessage(sessionId, projectId, "Here's the image.", details, name) }
+                .onFailure { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    insertMediaMessage(sessionId, projectId, "Couldn't create the image: ${e.message}", details)
+                }
+        }
+    }
+
+    private fun createVideo(request: com.example.ai.MediaRequest.Video, sessionId: Long, projectId: Long?) {
+        startMediaJob {
+            val details = "Made by OpenAI's video model through your Aura relay (${request.seconds} seconds, ${request.shape}), " +
+                "from Claude's description: \u201c${request.prompt}\u201d"
+            _mediaStatus.value = "Starting the video\u2026"
+            val result = runCatching {
+                val job = relayMedia.startVideo(request.prompt, request.seconds, request.shape).getOrThrow()
+                // Videos take a few minutes; check every few seconds, for up to 20 minutes.
+                val deadline = System.currentTimeMillis() + 20 * 60_000L
+                while (true) {
+                    kotlinx.coroutines.delay(5_000)
+                    val status = relayMedia.videoStatus(job).getOrThrow()
+                    if (status.failed) throw com.example.ai.RelayMedia.MediaError(status.error ?: "OpenAI couldn't make it")
+                    if (status.done) break
+                    _mediaStatus.value = "Creating a video with OpenAI\u2026 ${status.progress}%"
+                    if (System.currentTimeMillis() > deadline) throw com.example.ai.RelayMedia.MediaError("it was still not ready after 20 minutes")
+                }
+                _mediaStatus.value = "Downloading the video\u2026"
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val app = getApplication<Application>()
+                    val temp = java.io.File(com.example.data.model.ChatVideos.dir(app), "vid_${java.util.UUID.randomUUID()}.mp4.part")
+                    try {
+                        relayMedia.downloadVideo(job, temp).getOrThrow()
+                        com.example.data.model.ChatVideos.save(app, com.example.data.model.ChatVideos.Prepared(temp, "mp4", 0, emptyList()))
+                    } catch (e: Exception) {
+                        temp.delete()
+                        throw e
+                    }
+                }
+            }
+            result.onSuccess { name -> insertMediaMessage(sessionId, projectId, "Here's the video.", details, name) }
+                .onFailure { e ->
+                    if (e is kotlinx.coroutines.CancellationException) {
+                        insertMediaMessage(sessionId, projectId, "Stopped waiting for the video.", details)
+                        throw e
+                    }
+                    insertMediaMessage(sessionId, projectId, "Couldn't create the video: ${e.message}", details)
+                }
+        }
+    }
+
     private val _elevenLabsVoice = MutableStateFlow(privacyPrefs.getBoolean("elevenlabs_voice", false))
     val elevenLabsVoice: StateFlow<Boolean> = _elevenLabsVoice.asStateFlow()
 
@@ -782,6 +915,7 @@ class AuraViewModel @JvmOverloads constructor(
                     sharedProject = sharedProject,
                     allowWebSearch = webSearch.value,
                     allowLinkReading = linkReading.value,
+                    allowMedia = mediaGeneration.value,
                     images = images.map { it.jpeg } + video?.frames.orEmpty().map { it.jpeg },
                     videoFrames = video?.frames?.size ?: 0,
                     attachmentNote = video?.let {
@@ -821,6 +955,7 @@ class AuraViewModel @JvmOverloads constructor(
                                 proposedActionId = actionId
                             )
                             chatRepository.insertMessage(aiMsg)
+                            state.mediaRequest?.let { onMediaRequested(it, currentSessionId, currentProj?.id) }
 
                             // If auto-speak enabled, speak the answer
                             if (_identity.value.autoSpeakResponses) {

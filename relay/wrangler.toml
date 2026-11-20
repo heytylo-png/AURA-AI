@@ -23,8 +23,17 @@ DAILY_SEARCH_LIMIT = "100"
 # the page text Claude reads, at most 20,000 tokens a page.
 WEB_FETCH_MAX_USES = "3"
 
+# Images and videos made by OpenAI (only when the OPENAI_API_KEY secret is set and the user turns it
+# on in the app). Videos cost much more than images, so they have a low daily cap and a length limit.
+OPENAI_IMAGE_MODEL = "gpt-image-2"
+OPENAI_IMAGE_QUALITY = "medium"
+OPENAI_VIDEO_MODEL = "sora-2"
+VIDEO_MAX_SECONDS = "8"
+DAILY_IMAGE_LIMIT = "20"
+DAILY_VIDEO_LIMIT = "3"
+
 # Per-user limits (requests per minute) so a loop or stolen token can't burn credits fast.
-# Spend limits in the Anthropic and ElevenLabs consoles remain the hard cap.
+# Spend limits in the Anthropic, ElevenLabs and OpenAI consoles remain the hard cap.
 [[ratelimits]]
 name = "CHAT_LIMITER"
 namespace_id = "1001"
@@ -34,3 +43,9 @@ simple = { limit = 15, period = 60 }
 name = "SPEAK_LIMITER"
 namespace_id = "1002"
 simple = { limit = 15, period = 60 }
+
+# Creating images and videos (checking on a video doesn't count).
+[[ratelimits]]
+name = "MEDIA_LIMITER"
+namespace_id = "1003"
+simple = { limit = 5, period = 60 }
