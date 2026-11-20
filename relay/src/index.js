@@ -465,8 +465,10 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
           ...(chat.system ? { system: chat.system } : {}),
           messages: chat.messages,
           ...(tools.length ? { tools } : {}),
-          // At most one proposal per reply; only set when the proposal tools are there.
-          ...(chat.actions ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
+          // At most one proposal per reply. The Claude API refuses disable_parallel_tool_use together
+          // with web search (its result filtering uses programmatic tool calling), so with web search on
+          // it is left out; the app still keeps only the first proposal in a reply.
+          ...(chat.actions && !chat.web ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
           stream: true,
         }),
       });
