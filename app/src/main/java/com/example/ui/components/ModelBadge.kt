@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.AlertDialog
@@ -46,9 +47,10 @@ fun ModelBadge(
 
     val isLocal = modelUsed == AiModelUsed.LOCAL
     val isNone = modelUsed == AiModelUsed.NONE
+    val isMedia = modelUsed == AiModelUsed.MEDIA
     // Quiet outlined tag; it says where the reply came from, so it is shown on every AI message.
     val textColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val icon = when { isNone -> Icons.Default.Info; isLocal -> Icons.Default.PhoneAndroid; else -> Icons.Default.Cloud }
+    val icon = when { isNone -> Icons.Default.Info; isLocal -> Icons.Default.PhoneAndroid; isMedia -> Icons.Default.Image; else -> Icons.Default.Cloud }
 
     Box(
         modifier = modifier
@@ -69,7 +71,7 @@ fun ModelBadge(
                 modifier = Modifier.size(12.dp)
             )
             Text(
-                text = when { isNone -> "Not answered"; isLocal -> "On this phone"; else -> "Claude" },
+                text = when { isNone -> "Not answered"; isLocal -> "On this phone"; isMedia -> "OpenAI"; else -> "Claude" },
                 color = textColor,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold
@@ -105,7 +107,7 @@ fun ModelBadge(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = when { isNone -> "No answer"; isLocal -> "Answered on this phone"; else -> "Answered by Claude" },
+                        text = when { isNone -> "No answer"; isLocal -> "Answered on this phone"; isMedia -> "Made by OpenAI"; else -> "Answered by Claude" },
                         style = MaterialTheme.typography.titleMedium
                     )
                 }

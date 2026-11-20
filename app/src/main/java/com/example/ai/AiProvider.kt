@@ -23,8 +23,16 @@ data class AiProviderRequest(
     val allowProposals: Boolean = false,
     /** The user's "Let Claude search the web" switch: Claude may run web searches for this reply. */
     val allowWebSearch: Boolean = false,
-    /** An image attached to [prompt]: JPEG prepared on the phone (see ChatImages), or null. */
-    val image: ByteArray? = null,
+    /** The user's "Let Claude open links" switch: Claude may open links that appear in this conversation. */
+    val allowLinkReading: Boolean = false,
+    /** The user's "Let Claude create images and videos" switch: Claude may ask for one with a tool. */
+    val allowMedia: Boolean = false,
+    /** Images attached to [prompt]: JPEGs prepared on the phone (see ChatImages), then any video's still frames. */
+    val images: List<ByteArray> = emptyList(),
+    /** How many of [images], at the end, are still frames from a video (see ChatVideos). */
+    val videoFrames: Int = 0,
+    /** Said to Claude before [prompt], about what is attached (when the video's frames were taken). */
+    val attachmentNote: String? = null,
     /** Open to-dos the user chose to share: titles and due dates only (see [CloudTodos]). */
     val openTodos: List<CloudTodo> = emptyList(),
     /** How many open to-dos the user has in total, so Claude knows whether [openTodos] is the whole list. */
@@ -57,6 +65,8 @@ sealed interface AiProviderEvent {
     data class Content(val text: String) : AiProviderEvent
     /** Claude is searching the web for [query] (shown while the reply is being written). */
     data class Searching(val query: String) : AiProviderEvent
+    /** Claude is opening the web page at [url] (shown while the reply is being written). */
+    data class ReadingLink(val url: String) : AiProviderEvent
     /** [modelName] is the model that actually answered, shown to the user (e.g. after a fallback). */
     data class Completed(
         val fullText: String,
@@ -71,7 +81,9 @@ sealed interface AiProviderEvent {
         /** Pages Claude cited, in the order first cited, each once. */
         val sources: List<WebSource> = emptyList(),
         /** The web search ran out of time (stop reason pause_turn), so the reply may be incomplete. */
-        val searchCutShort: Boolean = false
+        val searchCutShort: Boolean = false,
+        /** The links Claude opened for this reply, in order. */
+        val linksRead: List<String> = emptyList()
     ) : AiProviderEvent
     data class Error(val message: String) : AiProviderEvent
 }

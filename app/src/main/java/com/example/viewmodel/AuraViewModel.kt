@@ -190,6 +190,149 @@ class AuraViewModel @JvmOverloads constructor(
         _webSearch.value = enabled
     }
 
+    // On by default (the user asked for it): when a message or the chat has a link, Claude may open
+    // that page. The page is fetched by Anthropic, so the site sees Anthropic, not this phone.
+    private val _linkReading = MutableStateFlow(privacyPrefs.getBoolean("link_reading_enabled", true))
+    val linkReading: StateFlow<Boolean> = _linkReading.asStateFlow()
+
+    fun setLinkReading(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("link_reading_enabled", enabled).apply()
+        _linkReading.value = enabled
+    }
+
+    // Off by default: Claude may ask OpenAI's models for an image (made straight away) or a video
+    // (made only after the user confirms). Claude's description of it goes to OpenAI through the relay.
+    private val _mediaGeneration = MutableStateFlow(privacyPrefs.getBoolean("media_generation_enabled", false))
+    val mediaGeneration: StateFlow<Boolean> = _mediaGeneration.asStateFlow()
+
+    fun setMediaGeneration(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("media_generation_enabled", enabled).apply()
+        _mediaGeneration.value = enabled
+    }
+
+    /** A video Claude suggested, waiting for the user to confirm it (videos cost much more than images). */
+    data class VideoToConfirm(val request: com.example.ai.MediaRequest.Video, val sessionId: Long, val projectId: Long?)
+
+    private val _videoToConfirm = MutableStateFlow<VideoToConfirm?>(null)
+    val videoToConfirm: StateFlow<VideoToConfirm?> = _videoToConfirm.asStateFlow()
+
+    /** What's being created right now ("Creating an image…", "Creating a video… 40%"), or null. */
+    private val _mediaStatus = MutableStateFlow<String?>(null)
+    val mediaStatus: StateFlow<String?> = _mediaStatus.asStateFlow()
+    private var mediaJob: kotlinx.coroutines.Job? = null
+
+    private val relayMedia by lazy { com.example.ai.RelayMedia(BuildConfig.AURA_RELAY_URL, relayAuth) }
+
+    private fun onMediaRequested(request: com.example.ai.MediaRequest, sessionId: Long, projectId: Long?) {
+        when (request) {
+            is com.example.ai.MediaRequest.Image -> createImage(request, sessionId, projectId)
+            is com.example.ai.MediaRequest.Video -> _videoToConfirm.value = VideoToConfirm(request, sessionId, projectId)
+        }
+    }
+
+    fun declineVideo() {
+        _videoToConfirm.value = null
+    }
+
+    fun confirmVideo() {
+        val pending = _videoToConfirm.value ?: return
+        _videoToConfirm.value = null
+        createVideo(pending.request, pending.sessionId, pending.projectId)
+    }
+
+    /** Stops waiting for an image or video. (A video OpenAI already started is still billed.) */
+    fun cancelMedia() {
+        mediaJob?.cancel()
+    }
+
+    private fun startMediaJob(block: suspend () -> Unit): Boolean {
+        if (mediaJob?.isActive == true) {
+            voiceNotice("Something is already being created. Wait for it to finish, or cancel it.")
+            return false
+        }
+        mediaJob = viewModelScope.launch {
+            try {
+                block()
+            } finally {
+                _mediaStatus.value = null
+            }
+        }
+        return true
+    }
+
+    private suspend fun insertMediaMessage(sessionId: Long, projectId: Long?, text: String, details: String, attachment: String? = null) {
+        chatRepository.insertMessage(
+            ChatMessageEntity(
+                sender = Sender.AI,
+                text = text,
+                modelUsed = if (attachment != null) AiModelUsed.MEDIA else AiModelUsed.NONE,
+                reasoningExplanation = details,
+                associatedProjectId = projectId,
+                sessionId = sessionId,
+                imageName = attachment
+            )
+        )
+    }
+
+    private fun createImage(request: com.example.ai.MediaRequest.Image, sessionId: Long, projectId: Long?) {
+        startMediaJob {
+            _mediaStatus.value = "Creating an image with OpenAI\u2026"
+            val details = "Made by OpenAI's image model through your Aura relay, from Claude's description: \u201c${request.prompt}\u201d"
+            relayMedia.generateImage(request.prompt, request.shape)
+                .mapCatching { bytes ->
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.example.data.model.ChatImages.save(getApplication(), com.example.data.model.ChatImages.prepare(bytes))
+                    }
+                }
+                .onSuccess { name -> insertMediaMessage(sessionId, projectId, "Here's the image.", details, name) }
+                .onFailure { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    insertMediaMessage(sessionId, projectId, "Couldn't create the image: ${e.message}", details)
+                }
+        }
+    }
+
+    private fun createVideo(request: com.example.ai.MediaRequest.Video, sessionId: Long, projectId: Long?) {
+        startMediaJob {
+            val details = "Made by OpenAI's video model through your Aura relay (${request.seconds} seconds, ${request.shape}), " +
+                "from Claude's description: \u201c${request.prompt}\u201d"
+            _mediaStatus.value = "Starting the video\u2026"
+            val result = runCatching {
+                val job = relayMedia.startVideo(request.prompt, request.seconds, request.shape).getOrThrow()
+                // Videos take a few minutes; check every few seconds, for up to 20 minutes.
+                val deadline = System.currentTimeMillis() + 20 * 60_000L
+                while (true) {
+                    kotlinx.coroutines.delay(5_000)
+                    val status = relayMedia.videoStatus(job).getOrThrow()
+                    if (status.failed) throw com.example.ai.RelayMedia.MediaError(status.error ?: "OpenAI couldn't make it")
+                    if (status.done) break
+                    _mediaStatus.value = "Creating a video with OpenAI\u2026 ${status.progress}%"
+                    if (System.currentTimeMillis() > deadline) throw com.example.ai.RelayMedia.MediaError("it was still not ready after 20 minutes")
+                }
+                _mediaStatus.value = "Downloading the video\u2026"
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val app = getApplication<Application>()
+                    val temp = java.io.File(com.example.data.model.ChatVideos.dir(app), "vid_${java.util.UUID.randomUUID()}.mp4.part")
+                    try {
+                        relayMedia.downloadVideo(job, temp).getOrThrow()
+                        com.example.data.model.ChatVideos.save(app, com.example.data.model.ChatVideos.Prepared(temp, "mp4", 0, emptyList()))
+                    } catch (e: Exception) {
+                        temp.delete()
+                        throw e
+                    }
+                }
+            }
+            result.onSuccess { name -> insertMediaMessage(sessionId, projectId, "Here's the video.", details, name) }
+                .onFailure { e ->
+                    if (e is kotlinx.coroutines.CancellationException) {
+                        insertMediaMessage(sessionId, projectId, "Stopped waiting for the video.", details)
+                        throw e
+                    }
+                    insertMediaMessage(sessionId, projectId, "Couldn't create the video: ${e.message}", details)
+                }
+        }
+    }
+
     private val _elevenLabsVoice = MutableStateFlow(privacyPrefs.getBoolean("elevenlabs_voice", false))
     val elevenLabsVoice: StateFlow<Boolean> = _elevenLabsVoice.asStateFlow()
 
@@ -608,12 +751,24 @@ class AuraViewModel @JvmOverloads constructor(
             runCatching { com.example.data.model.ChatImages.prepare(getApplication(), uri) }
         }
 
+    /** Copies a video the user picked into Aura's storage and takes its still frames, on the phone. */
+    suspend fun prepareVideo(uri: android.net.Uri): Result<com.example.data.model.ChatVideos.Prepared> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { com.example.data.model.ChatVideos.prepare(getApplication(), uri) }
+        }
+
+    /** Whether a picked file is a video (otherwise it's treated as an image). */
+    fun isVideo(uri: android.net.Uri): Boolean =
+        com.example.data.model.ChatVideos.isVideoType(getApplication<Application>().contentResolver.getType(uri))
+
     /** Deletes stored images that no message refers to any more (after chats are cleared or deleted). */
     private fun deleteUnusedImages() {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
-                val inUse = db.chatMessageDao().imageNamesInUse().toSet()
+                val inUse = db.chatMessageDao().imageNamesInUse()
+                    .flatMap { com.example.data.model.Attachments.names(it) }.toSet()
                 com.example.data.model.ChatImages.deleteUnused(getApplication(), inUse)
+                com.example.data.model.ChatVideos.deleteUnused(getApplication(), inUse)
             }
         }
     }
@@ -676,8 +831,12 @@ class AuraViewModel @JvmOverloads constructor(
      * Sends a message. Returns false, and does nothing, if it can't be sent right now (it is blank,
      * or a reply is still being written), so the caller can keep the text instead of losing it.
      */
-    fun sendMessage(text: String, image: com.example.data.model.ChatImages.Prepared? = null): Boolean {
-        if ((text.isBlank() && image == null) || _isGenerating.value) return false
+    fun sendMessage(
+        text: String,
+        images: List<com.example.data.model.ChatImages.Prepared> = emptyList(),
+        video: com.example.data.model.ChatVideos.Prepared? = null
+    ): Boolean {
+        if ((text.isBlank() && images.isEmpty() && video == null) || _isGenerating.value) return false
         val currentProj = _activeProject.value
         // Set before anything else runs, so a second tap can't send the message twice.
         _isGenerating.value = true
@@ -715,18 +874,18 @@ class AuraViewModel @JvmOverloads constructor(
                 }
 
                 // 1. Insert User Message
-                // An attached image is stored on the phone with the message, then sent once with it.
-                val imageName = image?.let {
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        com.example.data.model.ChatImages.save(getApplication(), it)
-                    }
+                // Attached images and video are stored on the phone with the message, then sent once
+                // with it (the video as still frames).
+                val imageNames = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    images.map { com.example.data.model.ChatImages.save(getApplication(), it) } +
+                        listOfNotNull(video?.let { com.example.data.model.ChatVideos.save(getApplication(), it) })
                 }
                 val userMsg = ChatMessageEntity(
                     sender = Sender.USER,
                     text = text.trim(),
                     associatedProjectId = currentProj?.id,
                     sessionId = currentSessionId,
-                    imageName = imageName
+                    imageName = com.example.data.model.Attachments.join(imageNames)
                 )
                 chatRepository.insertMessage(userMsg)
 
@@ -755,7 +914,13 @@ class AuraViewModel @JvmOverloads constructor(
                     sharedTodosTotal = sharedTodoTotal,
                     sharedProject = sharedProject,
                     allowWebSearch = webSearch.value,
-                    image = image?.jpeg
+                    allowLinkReading = linkReading.value,
+                    allowMedia = mediaGeneration.value,
+                    images = images.map { it.jpeg } + video?.frames.orEmpty().map { it.jpeg },
+                    videoFrames = video?.frames?.size ?: 0,
+                    attachmentNote = video?.let {
+                        com.example.data.model.ChatVideos.noteForClaude(it.durationMs, it.frames, picturesBefore = images.size)
+                    }
                 ).collect { state ->
                     when (state) {
                         is HybridAiState.Starting -> {}
@@ -766,6 +931,7 @@ class AuraViewModel @JvmOverloads constructor(
                             _streamingActivity.value = null
                         }
                         is HybridAiState.Searching -> _streamingActivity.value = "Searching the web for \u201c${state.query}\u201d\u2026"
+                        is HybridAiState.ReadingLink -> _streamingActivity.value = "Reading ${com.example.ai.ChatLinks.host(state.url)}\u2026"
                         is HybridAiState.Completed -> {
                             _isGenerating.value = false
                             _currentStreamingText.value = null
@@ -789,6 +955,7 @@ class AuraViewModel @JvmOverloads constructor(
                                 proposedActionId = actionId
                             )
                             chatRepository.insertMessage(aiMsg)
+                            state.mediaRequest?.let { onMediaRequested(it, currentSessionId, currentProj?.id) }
 
                             // If auto-speak enabled, speak the answer
                             if (_identity.value.autoSpeakResponses) {

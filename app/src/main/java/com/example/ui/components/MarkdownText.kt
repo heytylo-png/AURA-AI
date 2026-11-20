@@ -11,7 +11,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
@@ -54,7 +53,7 @@ fun MarkdownText(
 
     val link = linkToOpen
     if (link != null) {
-        val uriHandler = LocalUriHandler.current
+        val context = androidx.compose.ui.platform.LocalContext.current
         AlertDialog(
             onDismissRequest = { linkToOpen = null },
             title = { Text("Open this link?") },
@@ -62,7 +61,7 @@ fun MarkdownText(
                 // The whole address, selectable, so it can be read or copied before opening.
                 SelectionContainer {
                     Text(
-                        text = "It opens in your browser, at ${MarkdownRenderer.hostOf(link)}:\n\n$link",
+                        text = "It opens in a browser view inside Aura, at ${MarkdownRenderer.hostOf(link)}:\n\n$link",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.testTag("open_link_address")
                     )
@@ -72,7 +71,7 @@ fun MarkdownText(
                 TextButton(
                     onClick = {
                         linkToOpen = null
-                        runCatching { uriHandler.openUri(link) }
+                        InAppBrowser.open(context, link)
                     },
                     modifier = Modifier.testTag("open_link_confirm")
                 ) { Text("Open") }

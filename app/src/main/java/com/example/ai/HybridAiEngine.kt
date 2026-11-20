@@ -25,12 +25,15 @@ sealed interface HybridAiState {
     data class Streaming(val text: String, val modelUsed: AiModelUsed) : HybridAiState
     /** Claude is searching the web for [query] while it writes the reply. */
     data class Searching(val query: String) : HybridAiState
+    data class ReadingLink(val url: String) : HybridAiState
     data class Completed(
         val fullText: String,
         val modelUsed: AiModelUsed,
         val latencyMs: Long,
         val reasoningRationale: String,
-        val proposedAction: TaskActionEntity? = null
+        val proposedAction: TaskActionEntity? = null,
+        /** An image or video Claude asked to create in this reply. */
+        val mediaRequest: MediaRequest? = null
     ) : HybridAiState
     data class Error(val message: String) : HybridAiState
 }
@@ -86,27 +89,35 @@ class HybridAiEngine(
         sharedProject: CloudProject? = null,
         /** The user's "Let Claude search the web" switch. */
         allowWebSearch: Boolean = false,
-        /** An image attached to [prompt] (JPEG, prepared on the phone). Only Claude can read it. */
-        image: ByteArray? = null
+        /** The user's "Let Claude open links" switch. */
+        allowLinkReading: Boolean = false,
+        /** The user's "Let Claude create images and videos" switch. */
+        allowMedia: Boolean = false,
+        /** Images attached to [prompt] (JPEGs, prepared on the phone). Only Claude can read them. */
+        images: List<ByteArray> = emptyList(),
+        /** How many of [images], at the end, are still frames from a video. */
+        videoFrames: Int = 0,
+        /** Said to Claude before [prompt], about the attachments. */
+        attachmentNote: String? = null
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
 
         // The phone can't read images, so a message with one goes to Claude or isn't answered.
         // Never answered on the phone as if the image weren't there.
-        if (image != null) {
+        if (images.isNotEmpty()) {
             val blocked = when {
                 !allowCloudRequest -> notice(
-                    "Nothing was sent: only Claude can read images, and cloud chat is off. Turn on \"Cloud chat\" " +
-                        "in Settings \u2192 Cloud AI to ask about this image.",
+                    "Nothing was sent: only Claude can see pictures and videos, and cloud chat is off. Turn on \"Cloud chat\" " +
+                        "in Settings \u2192 Cloud AI to ask about what you attached.",
                     "Image attached with cloud chat off; nothing was sent."
                 )
                 mode == HybridRoutingMode.FORCE_LOCAL -> notice(
-                    "Nothing was sent: Local mode can't read images. Switch to Auto or Cloud to ask Claude about this image.",
+                    "Nothing was sent: Local mode can't see pictures or videos. Switch to Auto or Cloud to ask Claude about what you attached.",
                     "Image attached in Local mode; nothing was sent."
                 )
                 !online -> notice(
-                    "You're offline, and only Claude can read images. Nothing was sent; try again when you're connected.",
+                    "You're offline, and only Claude can see pictures and videos. Nothing was sent; try again when you're connected.",
                     "Image attached while offline; nothing was sent."
                 )
                 else -> null
@@ -120,7 +131,7 @@ class HybridAiEngine(
         val routeToLocal = when (mode) {
             HybridRoutingMode.FORCE_LOCAL -> true
             HybridRoutingMode.FORCE_CLOUD -> !online // Force cloud unless device is strictly offline
-            HybridRoutingMode.AUTO_HYBRID -> !online || (image == null && shouldRouteToLocal(prompt))
+            HybridRoutingMode.AUTO_HYBRID -> !online || (images.isEmpty() && shouldRouteToLocal(prompt))
         }
 
         // Cloud use is explicitly opt-in.
@@ -181,7 +192,11 @@ class HybridAiEngine(
             history = history,
             allowProposals = allowProposals,
             allowWebSearch = allowWebSearch,
-            image = image
+            allowLinkReading = allowLinkReading,
+            allowMedia = allowMedia,
+            images = images,
+            videoFrames = videoFrames,
+            attachmentNote = attachmentNote
         ).forCloud(sharePersonalContext).copy(
             openTodos = sharedTodos.take(CloudTodos.MAX),
             openTodosTotal = if (sharedTodos.isEmpty()) 0 else maxOf(sharedTodosTotal, sharedTodos.take(CloudTodos.MAX).size),
@@ -206,6 +221,7 @@ class HybridAiEngine(
                         emit(HybridAiState.Streaming(event.text, AiModelUsed.CLOUD))
                     }
                     is AiProviderEvent.Searching -> emit(HybridAiState.Searching(event.query))
+                    is AiProviderEvent.ReadingLink -> emit(HybridAiState.ReadingLink(event.url))
                     is AiProviderEvent.Completed -> completed = event
                     is AiProviderEvent.Error -> failure = event.message
                 }
@@ -216,14 +232,27 @@ class HybridAiEngine(
             done != null -> {
                 // Never keyword-scanned cards under a cloud reply (audit SEC-07 / FB-06). The only card is
                 // one Claude itself proposed with a relay tool, after every field passed the phone's checks.
-                val proposal = done.toolCall?.takeIf { allowProposals }?.let { CloudProposals.toAction(it, projects) }
+                val mediaCall = done.toolCall?.takeIf { it.name in MediaRequest.TOOL_NAMES }
+                val media = mediaCall?.takeIf { allowMedia }?.let { MediaRequest.fromToolCall(it) }
+                val proposal = done.toolCall?.takeIf { allowProposals && mediaCall == null }?.let { CloudProposals.toAction(it, projects) }
                 val card = (proposal as? CloudProposals.Result.Card)?.action
                 val dropped = (proposal as? CloudProposals.Result.Dropped)?.let {
                     " Claude suggested a change, but it was not shown because ${it.problem}."
                 }.orEmpty()
+                val mediaNote = when {
+                    media is MediaRequest.Image -> " Claude asked for an image; its description goes to OpenAI to make it."
+                    media is MediaRequest.Video -> " Claude suggested a video; nothing is made unless you confirm, and then its description goes to OpenAI."
+                    mediaCall != null -> " Claude asked to create an image or video, but Aura couldn't read the request."
+                    else -> ""
+                }
                 val body = done.fullText.ifBlank {
-                    if (card != null) "I've suggested a change below. Nothing happens unless you approve it."
-                    else "Claude suggested a change that Aura couldn't show."
+                    when {
+                        media is MediaRequest.Image -> "Creating that image now."
+                        media is MediaRequest.Video -> "I can make that video. It needs your OK first, because videos cost more than images."
+                        card != null -> "I've suggested a change below. Nothing happens unless you approve it."
+                        mediaCall != null -> "Claude tried to create an image or video, but Aura couldn't read the request."
+                        else -> "Claude suggested a change that Aura couldn't show."
+                    }
                 }
                 // The relay caps how long a reply may be; say so instead of showing a cut-off answer as whole.
                 val withSources = body + sourcesSection(done.sources)
@@ -243,8 +272,9 @@ class HybridAiEngine(
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
                         reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " +
-                            sentSummary(history, providerRequest) + searchSummary(done.webSearches) + dropped + cutOffNote,
-                        proposedAction = card
+                            sentSummary(history, providerRequest) + searchSummary(done.webSearches) + linkSummary(done.linksRead) + mediaNote + dropped + cutOffNote,
+                        proposedAction = card,
+                        mediaRequest = media
                     )
                 )
             }
@@ -261,7 +291,7 @@ class HybridAiEngine(
                 )
             }
             // The phone can't stand in for Claude on an image: say what failed instead of a keyword reply.
-            mode == HybridRoutingMode.FORCE_CLOUD || image != null -> {
+            mode == HybridRoutingMode.FORCE_CLOUD || images.isNotEmpty() -> {
                 emit(notice(
                     "Claude couldn't answer this message.\n\n${failure ?: "No reply was received."}",
                     "Cloud request failed: ${failure ?: "no reply"}. Your message was sent to the relay."
@@ -292,7 +322,14 @@ class HybridAiEngine(
                 "this message and the last $earlier earlier Claude exchange${if (earlier == 1) "" else "s"} in this chat",
             "the assistant's name and personality"
         )
-        if (sent.image != null) parts += "the image you attached (shrunk, with its location and other photo data removed)"
+        when (val pictures = sent.images.size - sent.videoFrames) {
+            0 -> {}
+            1 -> parts += "the image you attached (shrunk, with its location and other photo data removed)"
+            else -> parts += "the $pictures images you attached (shrunk, with their location and other photo data removed)"
+        }
+        if (sent.videoFrames > 0) {
+            parts += "${plural(sent.videoFrames, "still frame")} from your video (no sound; the video itself stayed on this phone)"
+        }
         if (sent.allowPersonalContext) {
             val n = sent.activeMemories.size
             if (n > 0) parts += "$n memor${if (n == 1) "y" else "ies"} you marked to share"
@@ -340,6 +377,14 @@ class HybridAiEngine(
         val shown = queries.take(MAX_QUERIES_SHOWN).joinToString(", ") { "\"$it\"" }
         val more = if (queries.size > MAX_QUERIES_SHOWN) " and ${queries.size - MAX_QUERIES_SHOWN} more" else ""
         return " Claude searched the web ${if (queries.size == 1) "once" else "${queries.size} times"}: $shown$more."
+    }
+
+    /** Says which links Claude opened: the page's site was asked for it, through Anthropic. */
+    internal fun linkSummary(links: List<String>): String {
+        if (links.isEmpty()) return ""
+        val shown = links.take(MAX_QUERIES_SHOWN).joinToString(", ") { it }
+        val more = if (links.size > MAX_QUERIES_SHOWN) " and ${links.size - MAX_QUERIES_SHOWN} more" else ""
+        return " Claude opened ${if (links.size == 1) "a link" else "${links.size} links"}: $shown$more."
     }
 
     /** The pages Claude cited, as links under the reply. */

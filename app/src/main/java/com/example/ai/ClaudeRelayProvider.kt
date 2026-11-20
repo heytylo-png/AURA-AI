@@ -57,6 +57,9 @@ class ClaudeRelayProvider(
             return@flow
         }
 
+        // Claude gets the link-opening tool only when there is a link it could open: the tool can
+        // fetch only addresses already in the conversation.
+        val readLinks = request.allowLinkReading && ChatLinks.present(request)
         val body = JSONObject()
             .put(
                 "system",
@@ -68,12 +71,16 @@ class ClaudeRelayProvider(
                     openTodosTotal = request.openTodosTotal,
                     sharedProject = request.sharedProject,
                     webSearch = request.allowWebSearch,
-                    imageAttached = request.image != null
+                    imagesAttached = request.images.size,
+                    linkReading = readLinks,
+                    media = request.allowMedia
                 )
             )
             .put("messages", messagesJson(request))
             .apply { if (request.allowProposals) put("actions", true) }
             .apply { if (request.allowWebSearch) put("web", true) }
+            .apply { if (readLinks) put("fetch", true) }
+            .apply { if (request.allowMedia) put("media", true) }
             .toString()
 
         val startedAt = clock()
@@ -124,6 +131,10 @@ class ClaudeRelayProvider(
             val sources = LinkedHashMap<String, WebSource>()
             var searchIndex: Int? = null
             val searchInput = StringBuilder()
+            // Links opened: the block being read and the addresses so far.
+            val linksRead = mutableListOf<String>()
+            var fetchIndex: Int? = null
+            val fetchInput = StringBuilder()
             var afterNonText = false
             while (true) {
                 currentCoroutineContext().ensureActive()
@@ -154,6 +165,11 @@ class ClaudeRelayProvider(
                         searchIndex = event.index
                         searchInput.setLength(0)
                     }
+                    is SseEvent.FetchStart -> {
+                        afterNonText = true
+                        fetchIndex = event.index
+                        fetchInput.setLength(0)
+                    }
                     is SseEvent.Citation -> if (event.url.startsWith("https://") || event.url.startsWith("http://")) {
                         sources.putIfAbsent(event.url, WebSource(event.url, event.title.ifBlank { event.url }))
                     }
@@ -168,6 +184,7 @@ class ClaudeRelayProvider(
                     is SseEvent.ToolInput -> when (event.index) {
                         toolIndex -> toolInput.append(event.partialJson)
                         searchIndex -> searchInput.append(event.partialJson)
+                        fetchIndex -> fetchInput.append(event.partialJson)
                         else -> Unit
                     }
                     is SseEvent.BlockStop -> when (event.index) {
@@ -184,6 +201,15 @@ class ClaudeRelayProvider(
                             }
                             searchIndex = null
                         }
+                        fetchIndex -> {
+                            val url = runCatching { JSONObject(fetchInput.toString()).optString("url") }.getOrNull()
+                                ?.trim()?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+                            if (url != null) {
+                                linksRead += url.take(MAX_LINK_CHARS)
+                                emit(AiProviderEvent.ReadingLink(url.take(MAX_LINK_CHARS)))
+                            }
+                            fetchIndex = null
+                        }
                         else -> Unit
                     }
                     is SseEvent.StopReason -> if (event.reason != null) stopReason = event.reason
@@ -199,7 +225,8 @@ class ClaudeRelayProvider(
                                     cutOff = stopReason == "max_tokens",
                                     webSearches = searches.toList(),
                                     sources = sources.values.toList(),
-                                    searchCutShort = stopReason == "pause_turn"
+                                    searchCutShort = stopReason == "pause_turn",
+                                    linksRead = linksRead.toList()
                                 )
                             )
                         }
@@ -243,6 +270,7 @@ class ClaudeRelayProvider(
         data class TextStart(val index: Int) : SseEvent
         /** Claude starts a web search; its query arrives as [ToolInput] for the same index. */
         data class SearchStart(val index: Int) : SseEvent
+        data class FetchStart(val index: Int) : SseEvent
         /** Any other non-text block (search results, filtering code) starts. */
         data class OtherBlockStart(val index: Int) : SseEvent
         /** Claude cited a web page in the text it is writing. */
@@ -257,6 +285,8 @@ class ClaudeRelayProvider(
 
         /** Longest search query kept for showing to the user. */
         const val MAX_QUERY_CHARS = 200
+        /** Longest link address kept for showing to the user. */
+        const val MAX_LINK_CHARS = 500
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -270,19 +300,23 @@ class ClaudeRelayProvider(
             request.history.forEach { turn ->
                 array.put(JSONObject().put("role", turn.role.wire).put("content", turn.text))
             }
-            val image = request.image
-            if (image == null) {
+            if (request.images.isEmpty()) {
                 array.put(JSONObject().put("role", "user").put("content", request.prompt))
             } else {
-                // The image first, then the question about it (if any).
-                val blocks = JSONArray().put(
-                    JSONObject().put("type", "image").put(
-                        "source",
-                        JSONObject().put("type", "base64").put("media_type", "image/jpeg")
-                            .put("data", android.util.Base64.encodeToString(image, android.util.Base64.NO_WRAP))
+                // The images first, in the order picked, then the question about them (if any).
+                val blocks = JSONArray()
+                request.images.forEach { image ->
+                    blocks.put(
+                        JSONObject().put("type", "image").put(
+                            "source",
+                            JSONObject().put("type", "base64").put("media_type", "image/jpeg")
+                                .put("data", android.util.Base64.encodeToString(image, android.util.Base64.NO_WRAP))
+                        )
                     )
-                )
-                if (request.prompt.isNotBlank()) blocks.put(JSONObject().put("type", "text").put("text", request.prompt))
+                }
+                val text = listOfNotNull(request.attachmentNote?.takeIf { it.isNotBlank() }, request.prompt.takeIf { it.isNotBlank() })
+                    .joinToString("\n\n")
+                if (text.isNotEmpty()) blocks.put(JSONObject().put("type", "text").put("text", text))
                 array.put(JSONObject().put("role", "user").put("content", blocks))
             }
             return array
@@ -317,8 +351,11 @@ class ClaudeRelayProvider(
                     when (block.optString("type")) {
                         "tool_use" -> SseEvent.ToolStart(index, block.optString("name"))
                         "text" -> SseEvent.TextStart(index)
-                        "server_tool_use" ->
-                            if (block.optString("name") == "web_search") SseEvent.SearchStart(index) else SseEvent.OtherBlockStart(index)
+                        "server_tool_use" -> when (block.optString("name")) {
+                            "web_search" -> SseEvent.SearchStart(index)
+                            "web_fetch" -> SseEvent.FetchStart(index)
+                            else -> SseEvent.OtherBlockStart(index)
+                        }
                         "thinking", "redacted_thinking" -> null
                         else -> SseEvent.OtherBlockStart(index)
                     }

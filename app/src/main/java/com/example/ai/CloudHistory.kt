@@ -3,6 +3,8 @@ package com.example.ai
 import com.example.data.model.ActionStatus
 import com.example.data.model.AiModelUsed
 import com.example.data.model.ChatMessageEntity
+import com.example.data.model.Attachments
+import com.example.data.model.attachmentNames
 import com.example.data.model.Sender
 import com.example.data.model.TaskActionEntity
 
@@ -29,6 +31,12 @@ object CloudHistory {
     /** Stands in for an image from an earlier message, which is not sent again. */
     const val IMAGE_NOT_RESENT = "[The user attached an image to this message. It isn't sent again, so you can't see it now.]"
 
+    /** Stands in for what was attached to an earlier message (images, a video), which is not sent again. */
+    fun notResent(names: List<String>): String =
+        if (names.size == 1 && !Attachments.isVideo(names[0])) IMAGE_NOT_RESENT
+        else "[The user attached ${Attachments.describe(names)} to this message. " +
+            "${if (names.size == 1) "It isn't" else "They aren't"} sent again, so you can't see ${if (names.size == 1) "it" else "them"} now.]"
+
     fun fromMessages(
         messages: List<ChatMessageEntity>,
         maxExchanges: Int = MAX_EXCHANGES,
@@ -43,12 +51,13 @@ object CloudHistory {
             val user = messages[i]
             val reply = messages[i + 1]
             if (user.timestamp < since || reply.timestamp < since) continue
-            if (user.sender == Sender.USER && (user.text.isNotBlank() || user.imageName != null) &&
+            val attached = user.attachmentNames
+            if (user.sender == Sender.USER && (user.text.isNotBlank() || attached.isNotEmpty()) &&
                 reply.sender == Sender.AI && reply.modelUsed == AiModelUsed.CLOUD && reply.text.isNotBlank()
             ) {
                 val note = reply.proposedActionId?.let { actions[it] }?.let { outcomeNote(it) }
                 // Images are sent once, with their own message; later requests only say one was there.
-                val userText = if (user.imageName == null) user.text else "${user.text.trim()}\n\n$IMAGE_NOT_RESENT".trim()
+                val userText = if (attached.isEmpty()) user.text else "${user.text.trim()}\n\n${notResent(attached)}".trim()
                 exchanges += userText to (if (note == null) reply.text else "${reply.text}\n\n$note")
             }
         }

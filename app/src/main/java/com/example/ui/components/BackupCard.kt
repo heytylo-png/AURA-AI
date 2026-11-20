@@ -60,7 +60,8 @@ fun BackupCard(viewModel: AuraViewModel) {
             Text("Backup", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "Saves your chats, memories, projects, to-dos and settings to one file, encrypted with a passphrase you choose. " +
+                text = "Saves your chats (with their images), memories, projects, to-dos and settings to one file, encrypted with a passphrase you choose. " +
+                    "Videos aren't included, because of their size; they stay only on this phone. " +
                     "Keep the file somewhere safe (for example Google Drive or a computer). Aura never stores the passphrase, and a forgotten passphrase can't be recovered.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

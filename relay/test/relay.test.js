@@ -1,7 +1,7 @@
 // Run with: node --test relay/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool, MAX_IMAGE_BASE64_CHARS } from "../src/index.js";
+import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool, webFetchTool, MAX_IMAGE_BASE64_CHARS, MAX_IMAGES, MAX_TOTAL_IMAGE_BASE64_CHARS } from "../src/index.js";
 
 const PROJECT = "aura-test-project";
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -38,7 +38,7 @@ async function makeToken(claims = {}, { kid = "k1", key = keyPair.privateKey, al
   return `${signingInput}.${b64url(new Uint8Array(sig))}`;
 }
 
-function setup({ upstream, speechUpstream } = {}) {
+function setup({ upstream, speechUpstream, openaiUpstream } = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url: String(url), init });
@@ -53,6 +53,7 @@ function setup({ upstream, speechUpstream } = {}) {
     if (String(url) === "https://api.anthropic.com/v1/messages") {
       return upstream ? upstream(init) : new Response("event: message_stop\ndata: {}\n\n", { headers: { "content-type": "text/event-stream" } });
     }
+    if (String(url).startsWith("https://api.openai.com/") && openaiUpstream) return openaiUpstream(String(url), init);
     throw new Error(`unexpected fetch ${url}`);
   };
   const handle = createHandler({ fetchImpl, now: () => NOW });
@@ -167,7 +168,7 @@ test("health reports configuration without secrets", async () => {
   const { handle, env } = setup();
   const res = await handle(new Request("https://relay.example/health"), env);
   const body = await res.json();
-  assert.deepEqual(body, { ok: true, speech: false });
+  assert.deepEqual(body, { ok: true, speech: false, media: false });
   assert.ok(!JSON.stringify(body).includes("sk-test"));
 });
 
@@ -193,7 +194,7 @@ test("request bodies are validated", () => {
 
   assert.deepEqual(
     validateChatBody({ messages: [{ role: "user", content: "a", extra: 1 }, { role: "assistant", content: "b" }, { role: "user", content: "c" }] }),
-    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], actions: false, web: false }
+    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], actions: false, web: false, fetch: false, media: false }
   );
   assert.throws(() => validateChatBody({ messages: [{ role: "user", content: "x" }], actions: "yes" }), RelayError);
 });
@@ -454,6 +455,25 @@ test("web search is added only when the app asks, with the relay's own cap", asy
   assert.equal(bad.res.status, 400);
 });
 
+test("link opening is added only when the app asks, with the relay's own caps", async () => {
+  const fetchTool = { type: "web_fetch_20260209", name: "web_fetch", max_uses: 3, max_content_tokens: 20000 };
+  const on = await chatWith({ fetch: true });
+  assert.equal(on.res.status, 200);
+  assert.deepEqual(on.sent.tools, [fetchTool]);
+
+  // With proposals: no tool_choice, for the same reason as web search.
+  const withActions = await chatWith({ fetch: true, actions: true });
+  assert.deepEqual(withActions.sent.tools.map((t) => t.name), [...PROPOSAL_TOOLS.map((t) => t.name), "web_fetch"]);
+  assert.equal(withActions.sent.tool_choice, undefined);
+
+  const all = await chatWith({ fetch: true, web: true });
+  assert.deepEqual(all.sent.tools.map((t) => t.name), ["web_search", "web_fetch"]);
+
+  assert.equal((await chatWith({ fetch: "yes" })).res.status, 400);
+  assert.equal(webFetchTool({ WEB_FETCH_MAX_USES: "500" }).max_uses, 10);
+  assert.equal(webFetchTool({ WEB_FETCH_MAX_USES: "x" }).max_uses, 3);
+});
+
 test("searches per reply come from the relay setting, within bounds", () => {
   assert.equal(webSearchTool({}).max_uses, 3);
   assert.equal(webSearchTool({ WEB_SEARCH_MAX_USES: "5" }).max_uses, 5);
@@ -508,9 +528,11 @@ test("images are refused anywhere else, in other forms, or too large", () => {
   };
   // Not in an earlier message, and not from the assistant.
   refused([{ role: "user", content: [image()] }, { role: "assistant", content: "x" }, { role: "user", content: "y" }]);
-  // Only one image, image first, no other block types, no URLs or files.
-  refused([{ role: "user", content: [image(), image()] }]);
+  // Images first, at most MAX_IMAGES, at most one text block, no other block types, no URLs or files.
+  refused([{ role: "user", content: Array.from({ length: MAX_IMAGES + 1 }, () => image()) }]);
   refused([{ role: "user", content: [{ type: "text", text: "a" }, image()] }]);
+  refused([{ role: "user", content: [image(), { type: "text", text: "a" }, image()] }]);
+  refused([{ role: "user", content: [image(), { type: "text", text: " " }, { type: "text", text: "a" }] }]);
   refused([{ role: "user", content: [{ type: "text", text: "plain text needs no blocks" }] }]);
   refused([{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: JPEG } }] }]);
   refused([{ role: "user", content: [{ type: "image", source: { type: "url", url: "https://example.com/a.jpg" } }] }]);
@@ -519,6 +541,20 @@ test("images are refused anywhere else, in other forms, or too large", () => {
   refused([{ role: "user", content: [image({ data: "not base64!" })] }]);
   refused([{ role: "user", content: [image({ data: "" })] }]);
   refused([{ role: "user", content: [image({ data: "A".repeat(MAX_IMAGE_BASE64_CHARS + 4) })] }], 413);
+  // Each image within its own limit, but too much together.
+  const big = "A".repeat(MAX_IMAGE_BASE64_CHARS);
+  const tooMany = Math.floor(MAX_TOTAL_IMAGE_BASE64_CHARS / MAX_IMAGE_BASE64_CHARS) + 1;
+  refused([{ role: "user", content: Array.from({ length: tooMany }, () => image({ data: big })) }], 413);
+});
+
+test("several images can come with the newest message, in order", () => {
+  const second = "B".repeat(8);
+  const content = validateChatBody({
+    messages: [{ role: "user", content: [image(), image({ data: second }), { type: "text", text: "Which is better?" }] }]
+  }).messages[0].content;
+  assert.deepEqual(content.map((b) => b.type), ["image", "image", "text"]);
+  assert.equal(content[1].source.data, second);
+  assert.equal(validateChatBody({ messages: [{ role: "user", content: Array.from({ length: MAX_IMAGES }, () => image()) }] }).messages[0].content.length, MAX_IMAGES);
 });
 
 test("an image reaches Claude as one image block", async () => {
@@ -526,4 +562,172 @@ test("an image reaches Claude as one image block", async () => {
   assert.equal(res.status, 200);
   assert.equal(sent.messages[0].content[0].type, "image");
   assert.equal(sent.messages[0].content[0].source.data, JPEG);
+});
+
+// ---- Images and videos (media.js) ----
+
+async function media(path, { method = "POST", body, envExtra = { OPENAI_API_KEY: "sk-openai" }, openai, token } = {}) {
+  const sent = [];
+  const { handle, env } = setup({
+    openaiUpstream: async (url, init) => {
+      sent.push({ url, init });
+      return openai ? openai(url, init) : new Response("{}", { status: 500 });
+    },
+  });
+  Object.assign(env, envExtra);
+  const auth = token ?? (await makeToken());
+  const res = await handle(new Request(`https://relay.example${path}`, {
+    method,
+    headers: { authorization: `Bearer ${auth}`, "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }), env);
+  return { res, sent, env };
+}
+
+test("media: not configured without an OpenAI key, and sign-in is required", async () => {
+  const off = await media("/v1/image", { body: { prompt: "a cat" }, envExtra: {} });
+  assert.equal(off.res.status, 503);
+  assert.equal((await off.res.json()).error.type, "media_not_configured");
+  const placeholder = await media("/v1/image", { body: { prompt: "a cat" }, envExtra: { OPENAI_API_KEY: "not-set" } });
+  assert.equal(placeholder.res.status, 503);
+  const noToken = await media("/v1/image", { body: { prompt: "a cat" }, token: "bad" });
+  assert.equal(noToken.res.status, 401);
+  assert.equal(noToken.sent.length, 0);
+});
+
+test("media: an image is made with the relay's model, quality and size, never the app's", async () => {
+  const done = await media("/v1/image", {
+    body: { prompt: "  a red bicycle  ", shape: "landscape", model: "dall-e-3", quality: "max", n: 10 },
+    openai: () => new Response(JSON.stringify({ data: [{ b64_json: "AAAA" }] })),
+  });
+  assert.equal(done.res.status, 200);
+  assert.deepEqual(await done.res.json(), { image: "AAAA", mediaType: "image/jpeg" });
+  assert.equal(done.sent[0].url, "https://api.openai.com/v1/images/generations");
+  assert.equal(done.sent[0].init.headers.authorization, "Bearer sk-openai");
+  const sent = JSON.parse(done.sent[0].init.body);
+  assert.equal(sent.model, "gpt-image-2");
+  assert.equal(sent.quality, "medium");
+  assert.equal(sent.size, "1536x1024");
+  assert.equal(sent.n, 1);
+  assert.equal(sent.prompt, "a red bicycle");
+  assert.equal(sent.output_format, "jpeg");
+  // A hash stands in for the user, never their Firebase ID.
+  assert.ok(sent.safety_identifier && !sent.safety_identifier.includes(ALLOWED));
+
+  const configured = await media("/v1/image", {
+    body: { prompt: "x" }, envExtra: { OPENAI_API_KEY: "k", OPENAI_IMAGE_MODEL: "gpt-image-2.5-flare", OPENAI_IMAGE_QUALITY: "ultra" },
+    openai: () => new Response(JSON.stringify({ data: [{ b64_json: "AAAA" }] })),
+  });
+  const c = JSON.parse(configured.sent[0].init.body);
+  assert.equal(c.model, "gpt-image-2.5-flare");
+  assert.equal(c.quality, "medium", "an unknown quality falls back to medium");
+  assert.equal(c.size, "1024x1024");
+});
+
+test("media: bad image requests are refused before OpenAI is called; OpenAI's errors are passed on", async () => {
+  for (const body of [{}, { prompt: "  " }, { prompt: 5 }, { prompt: "x".repeat(4001) }, { prompt: "x", shape: "round" }]) {
+    const r = await media("/v1/image", { body });
+    assert.ok(r.res.status === 400 || r.res.status === 413, JSON.stringify(body));
+    assert.equal(r.sent.length, 0);
+  }
+  const blocked = await media("/v1/image", {
+    body: { prompt: "x" },
+    openai: () => new Response(JSON.stringify({ error: { message: "Your request was rejected by the safety system." } }), { status: 400 }),
+  });
+  assert.equal(blocked.res.status, 400);
+  assert.match((await blocked.res.json()).error.message, /safety system/);
+  const badKey = await media("/v1/image", { body: { prompt: "x" }, openai: () => new Response("{}", { status: 401 }) });
+  assert.equal(badKey.res.status, 502, "a bad OpenAI key is the relay's problem");
+});
+
+test("media: images have their own daily cap", async () => {
+  const store = fakeStore();
+  const ok = () => new Response(JSON.stringify({ data: [{ b64_json: "AAAA" }] }));
+  const envExtra = { OPENAI_API_KEY: "k", USAGE: store, DAILY_IMAGE_LIMIT: "1" };
+  assert.equal((await media("/v1/image", { body: { prompt: "x" }, envExtra, openai: ok })).res.status, 200);
+  const second = await media("/v1/image", { body: { prompt: "x" }, envExtra, openai: ok });
+  assert.equal(second.res.status, 429);
+  assert.equal(second.sent.length, 0);
+});
+
+test("media: a video is started within the relay's limits, and only its owner can check or download it", async () => {
+  const started = await media("/v1/video", {
+    body: { prompt: "waves at sunset", seconds: "8", shape: "landscape", model: "sora-2-pro" },
+    openai: () => new Response(JSON.stringify({ id: "video_123", status: "queued", progress: 0 })),
+  });
+  assert.equal(started.res.status, 200);
+  const job = await started.res.json();
+  assert.equal(job.id, "video_123");
+  assert.equal(job.status, "queued");
+  assert.ok(job.ticket.length > 20);
+  assert.equal(started.sent[0].url, "https://api.openai.com/v1/videos");
+  const form = started.sent[0].init.body;
+  assert.equal(form.get("model"), "sora-2");
+  assert.equal(form.get("seconds"), "8");
+  assert.equal(form.get("size"), "1280x720");
+  assert.equal(form.get("prompt"), "waves at sunset");
+
+  // Longer than the relay allows, or not a length OpenAI offers: refused before OpenAI.
+  for (const seconds of ["12", "5", 8.5]) {
+    const r = await media("/v1/video", { body: { prompt: "x", seconds } });
+    assert.equal(r.res.status, 400, String(seconds));
+    assert.equal(r.sent.length, 0);
+  }
+  const longAllowed = await media("/v1/video", {
+    body: { prompt: "x", seconds: "12" }, envExtra: { OPENAI_API_KEY: "sk-openai", VIDEO_MAX_SECONDS: "12" },
+    openai: () => new Response(JSON.stringify({ id: "video_9", status: "queued" })),
+  });
+  assert.equal(longAllowed.res.status, 200);
+
+  const q = `id=video_123&ticket=${encodeURIComponent(job.ticket)}`;
+  const status = await media(`/v1/video/status?${q}`, {
+    method: "GET",
+    openai: () => new Response(JSON.stringify({ id: "video_123", status: "in_progress", progress: 42 })),
+  });
+  assert.equal(status.res.status, 200);
+  assert.deepEqual(await status.res.json(), { status: "in_progress", progress: 42 });
+  assert.equal(status.sent[0].url, "https://api.openai.com/v1/videos/video_123");
+
+  const failed = await media(`/v1/video/status?${q}`, {
+    method: "GET",
+    openai: () => new Response(JSON.stringify({ status: "failed", progress: 0, error: { code: "moderation_blocked", message: "Blocked." } })),
+  });
+  assert.deepEqual(await failed.res.json(), { status: "failed", progress: 0, error: "Blocked." });
+
+  const content = await media(`/v1/video/content?${q}`, {
+    method: "GET",
+    openai: () => new Response(new Uint8Array([0, 0, 0, 24]), { headers: { "content-type": "application/binary" } }),
+  });
+  assert.equal(content.res.status, 200);
+  assert.equal(content.res.headers.get("content-type"), "video/mp4");
+  assert.equal(content.sent[0].url, "https://api.openai.com/v1/videos/video_123/content");
+  assert.equal((await content.res.arrayBuffer()).byteLength, 4);
+
+  // A wrong ticket, another video's ID, or a malformed ID: nothing reaches OpenAI.
+  for (const query of [`id=video_123&ticket=nope`, `id=video_999&ticket=${encodeURIComponent(job.ticket)}`, `id=../x&ticket=a`, ""]) {
+    const r = await media(`/v1/video/status?${query}`, { method: "GET" });
+    assert.ok(r.res.status === 404 || r.res.status === 400, query);
+    assert.equal(r.sent.length, 0);
+  }
+});
+
+test("media: videos have their own daily cap; checking on one doesn't count", async () => {
+  const store = fakeStore();
+  const envExtra = { OPENAI_API_KEY: "k", USAGE: store, DAILY_VIDEO_LIMIT: "1" };
+  const openai = () => new Response(JSON.stringify({ id: "video_1", status: "queued" }));
+  assert.equal((await media("/v1/video", { body: { prompt: "x" }, envExtra, openai })).res.status, 200);
+  assert.equal((await media("/v1/video", { body: { prompt: "x" }, envExtra, openai })).res.status, 429);
+});
+
+test("media: Claude gets the creation tools only when the app asks and the relay has a key", async () => {
+  const off = await chatWith({ media: true });
+  assert.equal(off.sent.tools, undefined, "no OpenAI key: no tools");
+  const on = await chatWith({ media: true }, { OPENAI_API_KEY: "k" });
+  assert.deepEqual(on.sent.tools.map((t) => t.name), ["generate_image", "generate_video"]);
+  assert.deepEqual(on.sent.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+  const notAsked = await chatWith({}, { OPENAI_API_KEY: "k" });
+  assert.equal(notAsked.sent.tools, undefined);
+  const withWeb = await chatWith({ media: true, web: true }, { OPENAI_API_KEY: "k" });
+  assert.equal(withWeb.sent.tool_choice, undefined);
+  assert.equal((await chatWith({ media: "yes" }, { OPENAI_API_KEY: "k" })).res.status, 400);
 });

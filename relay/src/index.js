@@ -4,7 +4,9 @@
 //   body: { "system": "...", "messages": [{ "role": "user" | "assistant", "content": "..." }] }
 //   response: Anthropic Messages API server-sent events, passed through unchanged.
 // POST /v1/speak  same sign-in; body: { "text": "..." }; response: MP3 audio from ElevenLabs.
-// GET  /health    no auth; reports only whether chat and speech are configured.
+// POST /v1/image, /v1/video, GET /v1/video/status, /v1/video/content: images and videos made by
+//                 OpenAI, same sign-in (see media.js).
+// GET  /health    no auth; reports only whether chat, speech and media are configured.
 //
 // Only Firebase users listed in ALLOWED_UIDS may call /v1/chat. The model, output limit and
 // request size are fixed here, so a stolen token cannot pick an expensive model or huge outputs.
@@ -19,7 +21,11 @@
 //   DAILY_SPEAK_LIMIT   var, default 150: speech requests per user per day (needs the USAGE binding)
 //   DAILY_SEARCH_LIMIT  var, default 100: chat requests with web search per user per day (needs USAGE)
 //   WEB_SEARCH_MAX_USES var, default 3: most web searches Claude may run for one reply
+//   WEB_FETCH_MAX_USES  var, default 3: most links Claude may open for one reply
 //   USAGE               optional KV namespace that holds the daily counts
+//   OPENAI_API_KEY and the other media settings: see media.js
+
+import { MEDIA_TOOLS, MEDIA_PATHS, MediaError, handleMedia, mediaConfigured } from "./media.js";
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
@@ -127,6 +133,9 @@ export const DEFAULT_DAILY_SPEAK_LIMIT = 150;
 export const DEFAULT_DAILY_SEARCH_LIMIT = 100;
 export const DEFAULT_WEB_SEARCH_MAX_USES = 3;
 const MAX_WEB_SEARCH_MAX_USES = 10;
+export const DEFAULT_WEB_FETCH_MAX_USES = 3;
+// Longest page text Claude gets from one link, so a huge page can't make one reply expensive.
+export const WEB_FETCH_MAX_CONTENT_TOKENS = 20_000;
 
 /**
  * Anthropic's web search tool, added only when the app asks for it ("web": true, the user's switch).
@@ -139,6 +148,20 @@ export function webSearchTool(env) {
     ? Math.min(configured, MAX_WEB_SEARCH_MAX_USES)
     : DEFAULT_WEB_SEARCH_MAX_USES;
   return { type: "web_search_20260209", name: "web_search", max_uses: maxUses };
+}
+
+/**
+ * Anthropic's web fetch tool, added only when the app asks for it ("fetch": true: the user's switch,
+ * and a link in the conversation). It can open only addresses that already appear in the
+ * conversation, and runs on Anthropic's side; the relay never fetches anything itself. It costs
+ * no more than the page text it reads, which is capped per page.
+ */
+export function webFetchTool(env) {
+  const configured = Number(env.WEB_FETCH_MAX_USES);
+  const maxUses = Number.isInteger(configured) && configured >= 1
+    ? Math.min(configured, MAX_WEB_SEARCH_MAX_USES)
+    : DEFAULT_WEB_FETCH_MAX_USES;
+  return { type: "web_fetch_20260209", name: "web_fetch", max_uses: maxUses, max_content_tokens: WEB_FETCH_MAX_CONTENT_TOKENS };
 }
 
 /**
@@ -261,42 +284,57 @@ export async function verifyFirebaseIdToken(token, projectId, getKey, now) {
   return payload.sub;
 }
 
-// One image may come with the newest user message. The app sends it already shrunk (about
-// 1,568 pixels on the long side, JPEG); this limit only stops oversized or abusive requests.
+// Images may come with the newest user message. The app sends them already shrunk (about
+// 1,568 pixels on the long side, JPEG); these limits only stop oversized or abusive requests.
 export const MAX_IMAGE_BASE64_CHARS = 4_000_000;
+// Up to 6 pictures, plus still frames when a video is attached.
+export const MAX_IMAGES = 20;
+export const MAX_TOTAL_IMAGE_BASE64_CHARS = 16_000_000;
 const IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
- * The newest user message may be a list of blocks instead of text: at most one image and at most
- * one text block, in that order. The blocks are rebuilt here from the checked fields only, so
- * nothing else the app puts in them reaches the Claude API.
+ * The newest user message may be a list of blocks instead of text: 1 to MAX_IMAGES images, then at
+ * most one text block. The blocks are rebuilt here from the checked fields only, so nothing else
+ * the app puts in them reaches the Claude API.
  */
 function cleanBlocks(content, i) {
   const bad = (why) => new RelayError(400, "invalid_request", `messages[${i}]: ${why}`);
-  if (!Array.isArray(content) || content.length === 0 || content.length > 2) throw bad("content must be text, or 1 to 2 blocks.");
-  let image = null;
+  if (!Array.isArray(content) || content.length === 0 || content.length > MAX_IMAGES + 1) {
+    throw bad(`content must be text, or 1 to ${MAX_IMAGES + 1} blocks.`);
+  }
+  const images = [];
   let text = null;
+  let imageChars = 0;
   for (const block of content) {
-    if (block?.type === "image" && !image && !text) {
+    if (block?.type === "image" && text === null) {
+      if (images.length === MAX_IMAGES) throw bad(`at most ${MAX_IMAGES} images are allowed.`);
       const source = block.source;
       if (source?.type !== "base64" || !IMAGE_MEDIA_TYPES.includes(source.media_type) || typeof source.data !== "string") {
         throw bad("an image must be base64 JPEG, PNG, WebP or GIF.");
       }
       if (source.data.length > MAX_IMAGE_BASE64_CHARS) {
-        throw new RelayError(413, "request_too_large", "The image is too large.");
+        throw new RelayError(413, "request_too_large", "An image is too large.");
+      }
+      imageChars += source.data.length;
+      if (imageChars > MAX_TOTAL_IMAGE_BASE64_CHARS) {
+        throw new RelayError(413, "request_too_large", "The images are too large together.");
       }
       if (source.data.length === 0 || source.data.length % 4 !== 0 || !BASE64.test(source.data)) throw bad("the image data isn't valid base64.");
-      image = { type: "image", source: { type: "base64", media_type: source.media_type, data: source.data } };
-    } else if (block?.type === "text" && !text && typeof block.text === "string") {
-      text = block.text.trim() === "" ? null : { type: "text", text: block.text };
-      if (text === null && !image) throw bad("a text block needs text.");
+      images.push({ type: "image", source: { type: "base64", media_type: source.media_type, data: source.data } });
+    } else if (block?.type === "text" && text === null && typeof block.text === "string") {
+      if (block.text.trim() === "") {
+        if (images.length === 0) throw bad("a text block needs text.");
+        text = false; // an empty question after the images: nothing to send, but nothing may follow
+      } else {
+        text = { type: "text", text: block.text };
+      }
     } else {
-      throw bad("only one image followed by one text block is allowed.");
+      throw bad("only images followed by one text block are allowed.");
     }
   }
-  if (!image) throw bad("blocks are only for sending an image; send plain text otherwise.");
-  return { blocks: [image, ...(text ? [text] : [])], textLength: text ? text.text.length : 0 };
+  if (images.length === 0) throw bad("blocks are only for sending images; send plain text otherwise.");
+  return { blocks: [...images, ...(text ? [text] : [])], textLength: text ? text.text.length : 0 };
 }
 
 /** Validates and normalises the app's request body. Throws RelayError(400). */
@@ -312,7 +350,7 @@ export function validateChatBody(body) {
   let total = 0;
   const last = messages.length - 1;
   const clean = messages.map((m, i) => {
-    // Only the newest message, from the user, may carry an image.
+    // Only the newest message, from the user, may carry images.
     if (i === last && m?.role === "user" && Array.isArray(m.content)) {
       const { blocks, textLength } = cleanBlocks(m.content, i);
       total += textLength;
@@ -334,8 +372,14 @@ export function validateChatBody(body) {
   if (body.web !== undefined && typeof body.web !== "boolean") {
     throw new RelayError(400, "invalid_request", "web must be true or false.");
   }
+  if (body.fetch !== undefined && typeof body.fetch !== "boolean") {
+    throw new RelayError(400, "invalid_request", "fetch must be true or false.");
+  }
+  if (body.media !== undefined && typeof body.media !== "boolean") {
+    throw new RelayError(400, "invalid_request", "media must be true or false.");
+  }
   // Anything else the app sends (model, tools, max_tokens...) is ignored.
-  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true };
+  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true, fetch: body.fetch === true, media: body.media === true };
 }
 
 export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = {}) {
@@ -350,12 +394,14 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
       return json(200, {
         ok: configured,
         speech: Boolean(env.ELEVENLABS_API_KEY && env.ELEVENLABS_API_KEY !== "not-set" && env.ELEVENLABS_VOICE_ID),
+        media: mediaConfigured(env),
       });
     }
-    if (url.pathname !== "/v1/chat" && url.pathname !== "/v1/speak") {
+    const isMedia = MEDIA_PATHS.includes(url.pathname);
+    if (url.pathname !== "/v1/chat" && url.pathname !== "/v1/speak" && !isMedia) {
       return json(404, { error: { type: "not_found", message: "Not found." } });
     }
-    if (request.method !== "POST") return json(405, { error: { type: "method_not_allowed", message: "Use POST." } });
+    if (request.method !== "POST" && !isMedia) return json(405, { error: { type: "method_not_allowed", message: "Use POST." } });
 
     // Same sign-in and allowlist for every endpoint.
     async function authorize() {
@@ -376,6 +422,20 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
       }
       if (!(await withinDailyLimit(env.USAGE, kind, uid, dailyLimit, now()))) {
         throw new RelayError(429, "daily_limit", `Today's limit of ${dailyLimit} ${kind} requests is used up. It resets at midnight UTC.`);
+      }
+    }
+
+    if (isMedia) {
+      try {
+        const uid = await authorize();
+        return await handleMedia({
+          request, url, env, uid, fetchImpl,
+          // Only creating counts: checking on a video or downloading it costs nothing.
+          limit: (kind, daily) => checkLimit(env.MEDIA_LIMITER, uid, kind, daily),
+        });
+      } catch (e) {
+        if (e instanceof RelayError || e instanceof MediaError) return errorResponse(e);
+        return errorResponse(new RelayError(500, "relay_error", "The relay failed unexpectedly."));
       }
     }
 
@@ -450,7 +510,14 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
           );
         }
       }
-      const tools = [...(chat.actions ? PROPOSAL_TOOLS : []), ...(chat.web ? [webSearchTool(env)] : [])];
+      const tools = [
+        ...(chat.actions ? PROPOSAL_TOOLS : []),
+        ...(chat.web ? [webSearchTool(env)] : []),
+        ...(chat.fetch ? [webFetchTool(env)] : []),
+        // Only offered when the relay can actually create them.
+        ...(chat.media && mediaConfigured(env) ? MEDIA_TOOLS : []),
+      ];
+      const oneToolCall = (chat.actions || (chat.media && mediaConfigured(env))) && !chat.web && !chat.fetch;
 
       const upstream = await fetchImpl(ANTHROPIC_URL, {
         method: "POST",
@@ -465,10 +532,10 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
           ...(chat.system ? { system: chat.system } : {}),
           messages: chat.messages,
           ...(tools.length ? { tools } : {}),
-          // At most one proposal per reply. The Claude API refuses disable_parallel_tool_use together
-          // with web search (its result filtering uses programmatic tool calling), so with web search on
-          // it is left out; the app still keeps only the first proposal in a reply.
-          ...(chat.actions && !chat.web ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
+          // At most one proposal or creation per reply. The Claude API refuses disable_parallel_tool_use together
+          // with web search or web fetch (their result filtering uses programmatic tool calling), so with
+          // either on it is left out; the app still keeps only the first proposal in a reply.
+          ...(oneToolCall ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
           stream: true,
         }),
       });

@@ -12,7 +12,9 @@ enum class AiModelUsed(val label: String, val badgeIcon: String) {
     LOCAL("Local Offline Model", "bolt"),
     CLOUD("Claude (Cloud)", "cloud"), // stored by name; label only
     /** No model answered: a notice such as "cloud chat is off" or a cloud error. */
-    NONE("Not answered", "info")
+    NONE("Not answered", "info"),
+    /** An image or video made by OpenAI's models from Claude's description. */
+    MEDIA("Made by OpenAI", "image")
 }
 
 @Entity(tableName = "chat_messages")
@@ -27,7 +29,7 @@ data class ChatMessageEntity(
     val associatedProjectId: Long? = null,
     val proposedActionId: Long? = null, // Link to task action if AI proposed one in this turn
     val sessionId: Long = 1L,
-    /** An image the user attached, stored on the phone (see [ChatImages]); null when none. */
+    /** Files the user attached, stored on the phone, as names separated by commas (see [Attachments]); null when none. */
     val imageName: String? = null
 ) {
     /**
