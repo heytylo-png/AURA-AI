@@ -27,7 +27,7 @@ data class ChatMessageEntity(
     val associatedProjectId: Long? = null,
     val proposedActionId: Long? = null, // Link to task action if AI proposed one in this turn
     val sessionId: Long = 1L,
-    /** An image the user attached, stored on the phone (see [ChatImages]); null when none. */
+    /** Files the user attached, stored on the phone, as names separated by commas (see [Attachments]); null when none. */
     val imageName: String? = null
 ) {
     /**

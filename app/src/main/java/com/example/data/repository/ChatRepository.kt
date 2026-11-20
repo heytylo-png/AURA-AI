@@ -3,6 +3,7 @@ package com.example.data.repository
 import com.example.data.local.ChatMessageDao
 import com.example.data.local.ChatSessionDao
 import com.example.data.model.ChatMessageEntity
+import com.example.data.model.attachmentNames
 import com.example.data.model.ChatSessionEntity
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -111,7 +112,9 @@ class DefaultChatRepository @JvmOverloads constructor(
                 dao.updateSession(
                     session.copy(
                         title = updatedTitle,
-                        lastMessageSnippet = message.text.take(65).trim().ifEmpty { if (message.imageName != null) "Image" else "" },
+                        lastMessageSnippet = message.text.take(65).trim().ifEmpty {
+                            when (val n = message.attachmentNames.size) { 0 -> ""; 1 -> "Image"; else -> "$n images" }
+                        },
                         lastModifiedAt = message.timestamp
                     )
                 )

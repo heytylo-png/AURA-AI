@@ -1,7 +1,7 @@
 // Run with: node --test relay/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool, MAX_IMAGE_BASE64_CHARS } from "../src/index.js";
+import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool, MAX_IMAGE_BASE64_CHARS, MAX_IMAGES, MAX_TOTAL_IMAGE_BASE64_CHARS } from "../src/index.js";
 
 const PROJECT = "aura-test-project";
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -508,9 +508,11 @@ test("images are refused anywhere else, in other forms, or too large", () => {
   };
   // Not in an earlier message, and not from the assistant.
   refused([{ role: "user", content: [image()] }, { role: "assistant", content: "x" }, { role: "user", content: "y" }]);
-  // Only one image, image first, no other block types, no URLs or files.
-  refused([{ role: "user", content: [image(), image()] }]);
+  // Images first, at most MAX_IMAGES, at most one text block, no other block types, no URLs or files.
+  refused([{ role: "user", content: Array.from({ length: MAX_IMAGES + 1 }, () => image()) }]);
   refused([{ role: "user", content: [{ type: "text", text: "a" }, image()] }]);
+  refused([{ role: "user", content: [image(), { type: "text", text: "a" }, image()] }]);
+  refused([{ role: "user", content: [image(), { type: "text", text: " " }, { type: "text", text: "a" }] }]);
   refused([{ role: "user", content: [{ type: "text", text: "plain text needs no blocks" }] }]);
   refused([{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: JPEG } }] }]);
   refused([{ role: "user", content: [{ type: "image", source: { type: "url", url: "https://example.com/a.jpg" } }] }]);
@@ -519,6 +521,20 @@ test("images are refused anywhere else, in other forms, or too large", () => {
   refused([{ role: "user", content: [image({ data: "not base64!" })] }]);
   refused([{ role: "user", content: [image({ data: "" })] }]);
   refused([{ role: "user", content: [image({ data: "A".repeat(MAX_IMAGE_BASE64_CHARS + 4) })] }], 413);
+  // Each image within its own limit, but too much together.
+  const big = "A".repeat(MAX_IMAGE_BASE64_CHARS);
+  const tooMany = Math.floor(MAX_TOTAL_IMAGE_BASE64_CHARS / MAX_IMAGE_BASE64_CHARS) + 1;
+  refused([{ role: "user", content: Array.from({ length: tooMany }, () => image({ data: big })) }], 413);
+});
+
+test("several images can come with the newest message, in order", () => {
+  const second = "B".repeat(8);
+  const content = validateChatBody({
+    messages: [{ role: "user", content: [image(), image({ data: second }), { type: "text", text: "Which is better?" }] }]
+  }).messages[0].content;
+  assert.deepEqual(content.map((b) => b.type), ["image", "image", "text"]);
+  assert.equal(content[1].source.data, second);
+  assert.equal(validateChatBody({ messages: [{ role: "user", content: Array.from({ length: MAX_IMAGES }, () => image()) }] }).messages[0].content.length, MAX_IMAGES);
 });
 
 test("an image reaches Claude as one image block", async () => {

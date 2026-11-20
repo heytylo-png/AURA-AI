@@ -261,42 +261,57 @@ export async function verifyFirebaseIdToken(token, projectId, getKey, now) {
   return payload.sub;
 }
 
-// One image may come with the newest user message. The app sends it already shrunk (about
-// 1,568 pixels on the long side, JPEG); this limit only stops oversized or abusive requests.
+// Images may come with the newest user message. The app sends them already shrunk (about
+// 1,568 pixels on the long side, JPEG); these limits only stop oversized or abusive requests.
 export const MAX_IMAGE_BASE64_CHARS = 4_000_000;
+// Up to 6 pictures, plus still frames when a video is attached.
+export const MAX_IMAGES = 20;
+export const MAX_TOTAL_IMAGE_BASE64_CHARS = 16_000_000;
 const IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
- * The newest user message may be a list of blocks instead of text: at most one image and at most
- * one text block, in that order. The blocks are rebuilt here from the checked fields only, so
- * nothing else the app puts in them reaches the Claude API.
+ * The newest user message may be a list of blocks instead of text: 1 to MAX_IMAGES images, then at
+ * most one text block. The blocks are rebuilt here from the checked fields only, so nothing else
+ * the app puts in them reaches the Claude API.
  */
 function cleanBlocks(content, i) {
   const bad = (why) => new RelayError(400, "invalid_request", `messages[${i}]: ${why}`);
-  if (!Array.isArray(content) || content.length === 0 || content.length > 2) throw bad("content must be text, or 1 to 2 blocks.");
-  let image = null;
+  if (!Array.isArray(content) || content.length === 0 || content.length > MAX_IMAGES + 1) {
+    throw bad(`content must be text, or 1 to ${MAX_IMAGES + 1} blocks.`);
+  }
+  const images = [];
   let text = null;
+  let imageChars = 0;
   for (const block of content) {
-    if (block?.type === "image" && !image && !text) {
+    if (block?.type === "image" && text === null) {
+      if (images.length === MAX_IMAGES) throw bad(`at most ${MAX_IMAGES} images are allowed.`);
       const source = block.source;
       if (source?.type !== "base64" || !IMAGE_MEDIA_TYPES.includes(source.media_type) || typeof source.data !== "string") {
         throw bad("an image must be base64 JPEG, PNG, WebP or GIF.");
       }
       if (source.data.length > MAX_IMAGE_BASE64_CHARS) {
-        throw new RelayError(413, "request_too_large", "The image is too large.");
+        throw new RelayError(413, "request_too_large", "An image is too large.");
+      }
+      imageChars += source.data.length;
+      if (imageChars > MAX_TOTAL_IMAGE_BASE64_CHARS) {
+        throw new RelayError(413, "request_too_large", "The images are too large together.");
       }
       if (source.data.length === 0 || source.data.length % 4 !== 0 || !BASE64.test(source.data)) throw bad("the image data isn't valid base64.");
-      image = { type: "image", source: { type: "base64", media_type: source.media_type, data: source.data } };
-    } else if (block?.type === "text" && !text && typeof block.text === "string") {
-      text = block.text.trim() === "" ? null : { type: "text", text: block.text };
-      if (text === null && !image) throw bad("a text block needs text.");
+      images.push({ type: "image", source: { type: "base64", media_type: source.media_type, data: source.data } });
+    } else if (block?.type === "text" && text === null && typeof block.text === "string") {
+      if (block.text.trim() === "") {
+        if (images.length === 0) throw bad("a text block needs text.");
+        text = false; // an empty question after the images: nothing to send, but nothing may follow
+      } else {
+        text = { type: "text", text: block.text };
+      }
     } else {
-      throw bad("only one image followed by one text block is allowed.");
+      throw bad("only images followed by one text block are allowed.");
     }
   }
-  if (!image) throw bad("blocks are only for sending an image; send plain text otherwise.");
-  return { blocks: [image, ...(text ? [text] : [])], textLength: text ? text.text.length : 0 };
+  if (images.length === 0) throw bad("blocks are only for sending images; send plain text otherwise.");
+  return { blocks: [...images, ...(text ? [text] : [])], textLength: text ? text.text.length : 0 };
 }
 
 /** Validates and normalises the app's request body. Throws RelayError(400). */
@@ -312,7 +327,7 @@ export function validateChatBody(body) {
   let total = 0;
   const last = messages.length - 1;
   const clean = messages.map((m, i) => {
-    // Only the newest message, from the user, may carry an image.
+    // Only the newest message, from the user, may carry images.
     if (i === last && m?.role === "user" && Array.isArray(m.content)) {
       const { blocks, textLength } = cleanBlocks(m.content, i);
       total += textLength;

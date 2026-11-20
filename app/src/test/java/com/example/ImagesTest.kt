@@ -19,6 +19,7 @@ import com.example.backup.BackupManager
 import com.example.data.local.AppDatabase
 import com.example.data.model.AiIdentityConfig
 import com.example.data.model.AiModelUsed
+import com.example.data.model.Attachments
 import com.example.data.model.ChatImages
 import com.example.data.model.ChatMessageEntity
 import com.example.data.model.Sender
@@ -136,7 +137,7 @@ class ImagesTest {
     ) = runBlocking {
         HybridAiEngine(app, cloudEngine = cloud, onlineStatusOverride = { online }).processHybridRequest(
             prompt = prompt, mode = mode, identity = AiIdentityConfig(), activeMemories = emptyList(), projects = emptyList(),
-            allowCloudRequest = cloudOn, image = byteArrayOf(1, 2, 3)
+            allowCloudRequest = cloudOn, images = listOf(byteArrayOf(1, 2, 3))
         ).toList().last() as HybridAiState.Completed
     }
 
@@ -157,7 +158,7 @@ class ImagesTest {
         val auto = Recorder()
         val answered = ask(auto, HybridRoutingMode.AUTO_HYBRID, prompt = "remember that this is my bike")
         assertEquals(AiModelUsed.CLOUD, answered.modelUsed)
-        assertArrayEquals(byteArrayOf(1, 2, 3), auto.request!!.image)
+        assertArrayEquals(byteArrayOf(1, 2, 3), auto.request!!.images.single())
         assertTrue(answered.reasoningRationale.contains("the image you attached"))
 
         // If Claude fails, the phone doesn't answer as if there were no image.
@@ -169,7 +170,7 @@ class ImagesTest {
 
     @Test fun `the image goes first in the newest message only, and isn't sent again later`() {
         val request = AiProviderRequest(
-            prompt = "What is this?", identity = AiIdentityConfig(), image = byteArrayOf(1, 2, 3),
+            prompt = "What is this?", identity = AiIdentityConfig(), images = listOf(byteArrayOf(1, 2, 3)),
             history = CloudHistory.fromMessages(
                 listOf(
                     ChatMessageEntity(sender = Sender.USER, text = "", imageName = "img_00000000-0000-0000-0000-000000000000.jpg", timestamp = 1),
@@ -190,6 +191,51 @@ class ImagesTest {
         // An image on its own: no empty text block.
         val alone = ClaudeRelayProvider.messagesJson(request.copy(prompt = "", history = emptyList()))
         assertEquals(1, alone.getJSONObject(0).getJSONArray("content").length())
+    }
+
+    @Test fun `several images go in the order picked, are stored together, and are counted later`() {
+        val request = AiProviderRequest(
+            prompt = "Which one?", identity = AiIdentityConfig(),
+            images = listOf(byteArrayOf(1, 2, 3), byteArrayOf(4, 5, 6))
+        )
+        val blocks = ClaudeRelayProvider.messagesJson(request).getJSONObject(0).getJSONArray("content")
+        assertEquals(listOf("image", "image", "text"), (0 until blocks.length()).map { blocks.getJSONObject(it).getString("type") })
+        assertEquals("AQID", blocks.getJSONObject(0).getJSONObject("source").getString("data"))
+        assertEquals("BAUG", blocks.getJSONObject(1).getJSONObject("source").getString("data"))
+
+        val names = listOf(
+            "img_00000000-0000-0000-0000-000000000001.jpg",
+            "img_00000000-0000-0000-0000-000000000002.jpg"
+        )
+        val stored = Attachments.join(names)
+        assertEquals(names, Attachments.names(stored))
+        assertEquals(null, Attachments.join(emptyList()))
+        // Damaged or unknown entries are skipped, never turned into paths.
+        assertEquals(names.take(1), Attachments.names("${names[0]},../../secret,"))
+
+        val history = CloudHistory.fromMessages(
+            listOf(
+                ChatMessageEntity(sender = Sender.USER, text = "Compare", imageName = stored, timestamp = 1),
+                ChatMessageEntity(sender = Sender.AI, text = "The left one.", modelUsed = AiModelUsed.CLOUD, timestamp = 2)
+            )
+        )
+        assertEquals("Compare\n\n${CloudHistory.imagesNotResent(2)}", history.first().text)
+        assertTrue(history.first().text.contains("2 images"))
+
+        val prompt = com.example.ai.AuraPrompt.system(AiIdentityConfig(), imagesAttached = 2)
+        assertTrue(prompt.contains("2 images, in the order they picked them"))
+    }
+
+    @Test fun `the details say how many images went`() {
+        val recorder = Recorder()
+        val result = runBlocking {
+            HybridAiEngine(app, cloudEngine = recorder, onlineStatusOverride = { true }).processHybridRequest(
+                prompt = "Which?", mode = HybridRoutingMode.AUTO_HYBRID, identity = AiIdentityConfig(), activeMemories = emptyList(),
+                projects = emptyList(), allowCloudRequest = true, images = listOf(byteArrayOf(1), byteArrayOf(2), byteArrayOf(3))
+            ).toList().last() as HybridAiState.Completed
+        }
+        assertEquals(3, recorder.request!!.images.size)
+        assertTrue(result.reasoningRationale, result.reasoningRationale.contains("the 3 images you attached"))
     }
 
     @Test fun `backups keep images and restoring puts them back`() = runBlocking<Unit> {

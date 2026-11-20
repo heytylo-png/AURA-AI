@@ -3,6 +3,7 @@ package com.example.ai
 import com.example.data.model.ActionStatus
 import com.example.data.model.AiModelUsed
 import com.example.data.model.ChatMessageEntity
+import com.example.data.model.attachmentNames
 import com.example.data.model.Sender
 import com.example.data.model.TaskActionEntity
 
@@ -29,6 +30,11 @@ object CloudHistory {
     /** Stands in for an image from an earlier message, which is not sent again. */
     const val IMAGE_NOT_RESENT = "[The user attached an image to this message. It isn't sent again, so you can't see it now.]"
 
+    /** Stands in for several images from an earlier message. */
+    fun imagesNotResent(count: Int): String =
+        if (count == 1) IMAGE_NOT_RESENT
+        else "[The user attached $count images to this message. They aren't sent again, so you can't see them now.]"
+
     fun fromMessages(
         messages: List<ChatMessageEntity>,
         maxExchanges: Int = MAX_EXCHANGES,
@@ -43,12 +49,13 @@ object CloudHistory {
             val user = messages[i]
             val reply = messages[i + 1]
             if (user.timestamp < since || reply.timestamp < since) continue
-            if (user.sender == Sender.USER && (user.text.isNotBlank() || user.imageName != null) &&
+            val attached = user.attachmentNames.size
+            if (user.sender == Sender.USER && (user.text.isNotBlank() || attached > 0) &&
                 reply.sender == Sender.AI && reply.modelUsed == AiModelUsed.CLOUD && reply.text.isNotBlank()
             ) {
                 val note = reply.proposedActionId?.let { actions[it] }?.let { outcomeNote(it) }
                 // Images are sent once, with their own message; later requests only say one was there.
-                val userText = if (user.imageName == null) user.text else "${user.text.trim()}\n\n$IMAGE_NOT_RESENT".trim()
+                val userText = if (attached == 0) user.text else "${user.text.trim()}\n\n${imagesNotResent(attached)}".trim()
                 exchanges += userText to (if (note == null) reply.text else "${reply.text}\n\n$note")
             }
         }

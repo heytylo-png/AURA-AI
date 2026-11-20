@@ -68,7 +68,7 @@ class ClaudeRelayProvider(
                     openTodosTotal = request.openTodosTotal,
                     sharedProject = request.sharedProject,
                     webSearch = request.allowWebSearch,
-                    imageAttached = request.image != null
+                    imagesAttached = request.images.size
                 )
             )
             .put("messages", messagesJson(request))
@@ -270,18 +270,20 @@ class ClaudeRelayProvider(
             request.history.forEach { turn ->
                 array.put(JSONObject().put("role", turn.role.wire).put("content", turn.text))
             }
-            val image = request.image
-            if (image == null) {
+            if (request.images.isEmpty()) {
                 array.put(JSONObject().put("role", "user").put("content", request.prompt))
             } else {
-                // The image first, then the question about it (if any).
-                val blocks = JSONArray().put(
-                    JSONObject().put("type", "image").put(
-                        "source",
-                        JSONObject().put("type", "base64").put("media_type", "image/jpeg")
-                            .put("data", android.util.Base64.encodeToString(image, android.util.Base64.NO_WRAP))
+                // The images first, in the order picked, then the question about them (if any).
+                val blocks = JSONArray()
+                request.images.forEach { image ->
+                    blocks.put(
+                        JSONObject().put("type", "image").put(
+                            "source",
+                            JSONObject().put("type", "base64").put("media_type", "image/jpeg")
+                                .put("data", android.util.Base64.encodeToString(image, android.util.Base64.NO_WRAP))
+                        )
                     )
-                )
+                }
                 if (request.prompt.isNotBlank()) blocks.put(JSONObject().put("type", "text").put("text", request.prompt))
                 array.put(JSONObject().put("role", "user").put("content", blocks))
             }

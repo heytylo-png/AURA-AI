@@ -10,6 +10,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -96,6 +98,7 @@ import androidx.core.content.ContextCompat
 import com.example.ai.HybridRoutingMode
 import com.example.data.model.AiModelUsed
 import com.example.data.model.ChatMessageEntity
+import com.example.data.model.attachmentNames
 import com.example.data.model.Sender
 import com.example.ui.components.ActionProposalCard
 import com.example.ui.components.AiTypingIndicator
@@ -164,22 +167,30 @@ fun ChatScreen(viewModel: AuraViewModel) {
         )
     }
 
-    // An image picked to send with the next message (prepared on the phone), and its preview.
-    var pendingImage by remember { mutableStateOf<com.example.data.model.ChatImages.Prepared?>(null) }
-    val pendingPreview = remember(pendingImage) {
-        pendingImage?.let { img ->
-            android.graphics.BitmapFactory.decodeByteArray(img.jpeg, 0, img.jpeg.size)?.asImageBitmap()
-        }
-    }
+    // Images picked to send with the next message (prepared on the phone), in the order picked.
+    var pendingImages by remember { mutableStateOf<List<com.example.data.model.ChatImages.Prepared>>(emptyList()) }
     var preparingImage by remember { mutableStateOf(false) }
+    val roomForImages = com.example.data.model.Attachments.MAX_PICTURES - pendingImages.size
     // Android's photo picker: shows only what the user picks, so Aura needs no storage permission.
-    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
+    // It allows picking several at once; the limit is given when it opens.
+    val pickImages = rememberLauncherForActivityResult(PickImagesUpTo()) { uris ->
+        if (uris.isNotEmpty()) {
             preparingImage = true
             coroutineScope.launch {
-                viewModel.prepareImage(uri)
-                    .onSuccess { pendingImage = it }
-                    .onFailure { viewModel.voiceNotice(it.message ?: "That image couldn't be read.") }
+                val room = com.example.data.model.Attachments.MAX_PICTURES - pendingImages.size
+                val failures = mutableListOf<String>()
+                for (uri in uris.take(room.coerceAtLeast(0))) {
+                    viewModel.prepareImage(uri)
+                        .onSuccess { pendingImages = pendingImages + it }
+                        .onFailure { failures += it.message ?: "An image couldn't be read." }
+                }
+                when {
+                    failures.size == 1 -> viewModel.voiceNotice(failures.first())
+                    failures.size > 1 -> viewModel.voiceNotice("${failures.size} of the images couldn't be read.")
+                    uris.size > room -> viewModel.voiceNotice(
+                        "Up to ${com.example.data.model.Attachments.MAX_PICTURES} images go with one message; the rest were left out."
+                    )
+                }
                 preparingImage = false
             }
         }
@@ -462,28 +473,28 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     )
                 }
 
-                // The image waiting to be sent, with a way to take it off.
-                val preview = pendingPreview
-                if (preview != null) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        androidx.compose.foundation.Image(
-                            bitmap = preview,
-                            contentDescription = "Image to send",
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).testTag("pending_image")
-                        )
+                // The images waiting to be sent, each with a way to take it off.
+                if (pendingImages.isNotEmpty()) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            pendingImages.forEachIndexed { index, img ->
+                                PendingImage(
+                                    image = img,
+                                    number = index + 1,
+                                    onRemove = { pendingImages = pendingImages.filterIndexed { i, _ -> i != index } }
+                                )
+                            }
+                        }
                         Text(
-                            text = "Goes to Claude with your message. Location and other photo data are removed.",
+                            text = if (pendingImages.size == 1) "Goes to Claude with your message. Location and other photo data are removed."
+                            else "${pendingImages.size} images go to Claude with your message. Location and other photo data are removed.",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f).padding(horizontal = 10.dp)
+                            modifier = Modifier.padding(start = 4.dp, top = 4.dp)
                         )
-                        IconButton(onClick = { pendingImage = null }, modifier = Modifier.testTag("remove_pending_image")) {
-                            Icon(Icons.Default.Close, contentDescription = "Remove image")
-                        }
                     }
                 } else if (preparingImage) {
                     Text(
@@ -501,11 +512,9 @@ fun ChatScreen(viewModel: AuraViewModel) {
                 ) {
                     IconButton(
                         onClick = {
-                            pickImage.launch(
-                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
+                            pickImages.launch(roomForImages)
                         },
-                        enabled = !preparingImage,
+                        enabled = !preparingImage && roomForImages > 0,
                         modifier = Modifier.testTag("attach_image_button")
                     ) {
                         Icon(
@@ -540,13 +549,13 @@ fun ChatScreen(viewModel: AuraViewModel) {
                     Spacer(Modifier.width(8.dp))
 
                     // While voice is active the button stays a stop control, even once words appear.
-                    if ((inputText.isNotBlank() || pendingImage != null) && voiceState == VoiceState.IDLE) {
+                    if ((inputText.isNotBlank() || pendingImages.isNotEmpty()) && voiceState == VoiceState.IDLE) {
                         IconButton(
                             onClick = {
                                 // Keep the text if it can't be sent yet (a reply is still being written).
-                                if (viewModel.sendMessage(inputText, pendingImage)) {
+                                if (viewModel.sendMessage(inputText, pendingImages)) {
                                     inputText = ""
-                                    pendingImage = null
+                                    pendingImages = emptyList()
                                 } else {
                                     viewModel.voiceNotice("${identity.name} is still replying. Your message is kept; send it when the reply is done.")
                                 }
@@ -838,7 +847,7 @@ fun ChatMessageItem(
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 horizontalAlignment = Alignment.End
             ) {
-                message.imageName?.let { name -> MessageImage(name) }
+                MessageImages(message.attachmentNames)
                 if (message.text.isNotBlank()) Text(
                     text = message.text,
                     style = MaterialTheme.typography.bodyMedium,
@@ -1068,27 +1077,88 @@ fun EmptyChatWelcome(
 }
 
 
-/** An image the user sent, loaded small from Aura's private storage. */
+/** The photo picker, allowing up to [input] images (one at a time when only one more fits). */
+private class PickImagesUpTo : androidx.activity.result.contract.ActivityResultContract<Int, List<android.net.Uri>>() {
+    override fun createIntent(context: android.content.Context, input: Int): android.content.Intent {
+        val request = androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        return if (input <= 1) ActivityResultContracts.PickVisualMedia().createIntent(context, request)
+        else ActivityResultContracts.PickMultipleVisualMedia(input).createIntent(context, request)
+    }
+
+    // Reads both a single pick and a multiple pick.
+    override fun parseResult(resultCode: Int, intent: android.content.Intent?): List<android.net.Uri> =
+        ActivityResultContracts.PickMultipleVisualMedia().parseResult(resultCode, intent)
+}
+
+/** An image waiting to be sent: a small preview, its place in the order, and a remove button. */
 @Composable
-private fun MessageImage(name: String) {
+private fun PendingImage(image: com.example.data.model.ChatImages.Prepared, number: Int, onRemove: () -> Unit) {
+    val preview = remember(image) {
+        android.graphics.BitmapFactory.decodeByteArray(image.jpeg, 0, image.jpeg.size)?.asImageBitmap()
+    }
+    Box(modifier = Modifier.size(64.dp).testTag("pending_image")) {
+        if (preview != null) {
+            androidx.compose.foundation.Image(
+                bitmap = preview,
+                contentDescription = "Image $number to send",
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))
+            )
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(2.dp)
+                .size(24.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                .clickable(onClickLabel = "Remove image $number", onClick = onRemove)
+                .testTag("remove_pending_image"),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.Close, contentDescription = "Remove image $number", modifier = Modifier.size(16.dp))
+        }
+    }
+}
+
+/** The images a message came with, two to a row; tapping one opens it full screen. */
+@Composable
+private fun MessageImages(names: List<String>) {
+    if (names.isEmpty()) return
+    var open by remember { mutableStateOf<String?>(null) }
+    val single = names.size == 1
+    Column(
+        modifier = Modifier.padding(bottom = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        names.chunked(2).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                row.forEach { name -> MessageImage(name, single = single, onOpen = { open = name }) }
+            }
+        }
+    }
+    open?.let { name -> ImageViewer(name, onClose = { open = null }) }
+}
+
+/** One image the user sent, loaded small from Aura's private storage. */
+@Composable
+private fun MessageImage(name: String, single: Boolean, onOpen: () -> Unit) {
     val context = LocalContext.current
     val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, name) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             com.example.data.model.ChatImages.file(context, name)
-                ?.let { com.example.data.model.ChatImages.thumbnail(it, 720) }?.asImageBitmap()
+                ?.let { com.example.data.model.ChatImages.thumbnail(it, if (single) 720 else 360) }?.asImageBitmap()
         }
     }
     val image = bitmap
     if (image != null) {
         androidx.compose.foundation.Image(
             bitmap = image,
-            contentDescription = "Image you sent",
-            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-            modifier = Modifier
-                .padding(bottom = 6.dp)
-                .widthIn(max = 260.dp)
-                .heightIn(max = 260.dp)
+            contentDescription = "Image you sent. Tap to view full screen.",
+            contentScale = if (single) androidx.compose.ui.layout.ContentScale.Fit else androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = (if (single) Modifier.widthIn(max = 260.dp).heightIn(max = 260.dp) else Modifier.size(128.dp))
                 .clip(RoundedCornerShape(10.dp))
+                .clickable(onClickLabel = "View full screen", onClick = onOpen)
                 .testTag("message_image")
         )
     } else {
@@ -1097,5 +1167,41 @@ private fun MessageImage(name: String) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/** An image shown full screen, as large as it was stored. */
+@Composable
+private fun ImageViewer(name: String, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, name) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.example.data.model.ChatImages.file(context, name)
+                ?.let { com.example.data.model.ChatImages.thumbnail(it, 2048) }?.asImageBitmap()
+        }
+    }
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).testTag("image_viewer"),
+            contentAlignment = Alignment.Center
+        ) {
+            bitmap?.let {
+                androidx.compose.foundation.Image(
+                    bitmap = it,
+                    contentDescription = "Image you sent",
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).testTag("close_image_viewer")
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Close", tint = androidx.compose.ui.graphics.Color.White)
+            }
+        }
     }
 }

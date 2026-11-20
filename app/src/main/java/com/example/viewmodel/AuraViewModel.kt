@@ -612,7 +612,8 @@ class AuraViewModel @JvmOverloads constructor(
     private fun deleteUnusedImages() {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
-                val inUse = db.chatMessageDao().imageNamesInUse().toSet()
+                val inUse = db.chatMessageDao().imageNamesInUse()
+                    .flatMap { com.example.data.model.Attachments.names(it) }.toSet()
                 com.example.data.model.ChatImages.deleteUnused(getApplication(), inUse)
             }
         }
@@ -676,8 +677,8 @@ class AuraViewModel @JvmOverloads constructor(
      * Sends a message. Returns false, and does nothing, if it can't be sent right now (it is blank,
      * or a reply is still being written), so the caller can keep the text instead of losing it.
      */
-    fun sendMessage(text: String, image: com.example.data.model.ChatImages.Prepared? = null): Boolean {
-        if ((text.isBlank() && image == null) || _isGenerating.value) return false
+    fun sendMessage(text: String, images: List<com.example.data.model.ChatImages.Prepared> = emptyList()): Boolean {
+        if ((text.isBlank() && images.isEmpty()) || _isGenerating.value) return false
         val currentProj = _activeProject.value
         // Set before anything else runs, so a second tap can't send the message twice.
         _isGenerating.value = true
@@ -715,18 +716,16 @@ class AuraViewModel @JvmOverloads constructor(
                 }
 
                 // 1. Insert User Message
-                // An attached image is stored on the phone with the message, then sent once with it.
-                val imageName = image?.let {
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        com.example.data.model.ChatImages.save(getApplication(), it)
-                    }
+                // Attached images are stored on the phone with the message, then sent once with it.
+                val imageNames = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    images.map { com.example.data.model.ChatImages.save(getApplication(), it) }
                 }
                 val userMsg = ChatMessageEntity(
                     sender = Sender.USER,
                     text = text.trim(),
                     associatedProjectId = currentProj?.id,
                     sessionId = currentSessionId,
-                    imageName = imageName
+                    imageName = com.example.data.model.Attachments.join(imageNames)
                 )
                 chatRepository.insertMessage(userMsg)
 
@@ -755,7 +754,7 @@ class AuraViewModel @JvmOverloads constructor(
                     sharedTodosTotal = sharedTodoTotal,
                     sharedProject = sharedProject,
                     allowWebSearch = webSearch.value,
-                    image = image?.jpeg
+                    images = images.map { it.jpeg }
                 ).collect { state ->
                     when (state) {
                         is HybridAiState.Starting -> {}

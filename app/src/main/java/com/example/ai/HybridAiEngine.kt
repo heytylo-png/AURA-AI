@@ -86,15 +86,15 @@ class HybridAiEngine(
         sharedProject: CloudProject? = null,
         /** The user's "Let Claude search the web" switch. */
         allowWebSearch: Boolean = false,
-        /** An image attached to [prompt] (JPEG, prepared on the phone). Only Claude can read it. */
-        image: ByteArray? = null
+        /** Images attached to [prompt] (JPEGs, prepared on the phone). Only Claude can read them. */
+        images: List<ByteArray> = emptyList()
     ): Flow<HybridAiState> = flow {
         emit(HybridAiState.Starting)
         val online = isOnline()
 
         // The phone can't read images, so a message with one goes to Claude or isn't answered.
         // Never answered on the phone as if the image weren't there.
-        if (image != null) {
+        if (images.isNotEmpty()) {
             val blocked = when {
                 !allowCloudRequest -> notice(
                     "Nothing was sent: only Claude can read images, and cloud chat is off. Turn on \"Cloud chat\" " +
@@ -120,7 +120,7 @@ class HybridAiEngine(
         val routeToLocal = when (mode) {
             HybridRoutingMode.FORCE_LOCAL -> true
             HybridRoutingMode.FORCE_CLOUD -> !online // Force cloud unless device is strictly offline
-            HybridRoutingMode.AUTO_HYBRID -> !online || (image == null && shouldRouteToLocal(prompt))
+            HybridRoutingMode.AUTO_HYBRID -> !online || (images.isEmpty() && shouldRouteToLocal(prompt))
         }
 
         // Cloud use is explicitly opt-in.
@@ -181,7 +181,7 @@ class HybridAiEngine(
             history = history,
             allowProposals = allowProposals,
             allowWebSearch = allowWebSearch,
-            image = image
+            images = images
         ).forCloud(sharePersonalContext).copy(
             openTodos = sharedTodos.take(CloudTodos.MAX),
             openTodosTotal = if (sharedTodos.isEmpty()) 0 else maxOf(sharedTodosTotal, sharedTodos.take(CloudTodos.MAX).size),
@@ -261,7 +261,7 @@ class HybridAiEngine(
                 )
             }
             // The phone can't stand in for Claude on an image: say what failed instead of a keyword reply.
-            mode == HybridRoutingMode.FORCE_CLOUD || image != null -> {
+            mode == HybridRoutingMode.FORCE_CLOUD || images.isNotEmpty() -> {
                 emit(notice(
                     "Claude couldn't answer this message.\n\n${failure ?: "No reply was received."}",
                     "Cloud request failed: ${failure ?: "no reply"}. Your message was sent to the relay."
@@ -292,7 +292,11 @@ class HybridAiEngine(
                 "this message and the last $earlier earlier Claude exchange${if (earlier == 1) "" else "s"} in this chat",
             "the assistant's name and personality"
         )
-        if (sent.image != null) parts += "the image you attached (shrunk, with its location and other photo data removed)"
+        when (sent.images.size) {
+            0 -> {}
+            1 -> parts += "the image you attached (shrunk, with its location and other photo data removed)"
+            else -> parts += "the ${sent.images.size} images you attached (shrunk, with their location and other photo data removed)"
+        }
         if (sent.allowPersonalContext) {
             val n = sent.activeMemories.size
             if (n > 0) parts += "$n memor${if (n == 1) "y" else "ies"} you marked to share"
