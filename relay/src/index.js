@@ -19,6 +19,7 @@
 //   DAILY_SPEAK_LIMIT   var, default 150: speech requests per user per day (needs the USAGE binding)
 //   DAILY_SEARCH_LIMIT  var, default 100: chat requests with web search per user per day (needs USAGE)
 //   WEB_SEARCH_MAX_USES var, default 3: most web searches Claude may run for one reply
+//   WEB_FETCH_MAX_USES  var, default 3: most links Claude may open for one reply
 //   USAGE               optional KV namespace that holds the daily counts
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -127,6 +128,9 @@ export const DEFAULT_DAILY_SPEAK_LIMIT = 150;
 export const DEFAULT_DAILY_SEARCH_LIMIT = 100;
 export const DEFAULT_WEB_SEARCH_MAX_USES = 3;
 const MAX_WEB_SEARCH_MAX_USES = 10;
+export const DEFAULT_WEB_FETCH_MAX_USES = 3;
+// Longest page text Claude gets from one link, so a huge page can't make one reply expensive.
+export const WEB_FETCH_MAX_CONTENT_TOKENS = 20_000;
 
 /**
  * Anthropic's web search tool, added only when the app asks for it ("web": true, the user's switch).
@@ -139,6 +143,20 @@ export function webSearchTool(env) {
     ? Math.min(configured, MAX_WEB_SEARCH_MAX_USES)
     : DEFAULT_WEB_SEARCH_MAX_USES;
   return { type: "web_search_20260209", name: "web_search", max_uses: maxUses };
+}
+
+/**
+ * Anthropic's web fetch tool, added only when the app asks for it ("fetch": true: the user's switch,
+ * and a link in the conversation). It can open only addresses that already appear in the
+ * conversation, and runs on Anthropic's side; the relay never fetches anything itself. It costs
+ * no more than the page text it reads, which is capped per page.
+ */
+export function webFetchTool(env) {
+  const configured = Number(env.WEB_FETCH_MAX_USES);
+  const maxUses = Number.isInteger(configured) && configured >= 1
+    ? Math.min(configured, MAX_WEB_SEARCH_MAX_USES)
+    : DEFAULT_WEB_FETCH_MAX_USES;
+  return { type: "web_fetch_20260209", name: "web_fetch", max_uses: maxUses, max_content_tokens: WEB_FETCH_MAX_CONTENT_TOKENS };
 }
 
 /**
@@ -349,8 +367,11 @@ export function validateChatBody(body) {
   if (body.web !== undefined && typeof body.web !== "boolean") {
     throw new RelayError(400, "invalid_request", "web must be true or false.");
   }
+  if (body.fetch !== undefined && typeof body.fetch !== "boolean") {
+    throw new RelayError(400, "invalid_request", "fetch must be true or false.");
+  }
   // Anything else the app sends (model, tools, max_tokens...) is ignored.
-  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true };
+  return { system: system || undefined, messages: clean, actions: body.actions === true, web: body.web === true, fetch: body.fetch === true };
 }
 
 export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => Date.now() } = {}) {
@@ -465,7 +486,11 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
           );
         }
       }
-      const tools = [...(chat.actions ? PROPOSAL_TOOLS : []), ...(chat.web ? [webSearchTool(env)] : [])];
+      const tools = [
+        ...(chat.actions ? PROPOSAL_TOOLS : []),
+        ...(chat.web ? [webSearchTool(env)] : []),
+        ...(chat.fetch ? [webFetchTool(env)] : []),
+      ];
 
       const upstream = await fetchImpl(ANTHROPIC_URL, {
         method: "POST",
@@ -481,9 +506,9 @@ export function createHandler({ fetchImpl = (...a) => fetch(...a), now = () => D
           messages: chat.messages,
           ...(tools.length ? { tools } : {}),
           // At most one proposal per reply. The Claude API refuses disable_parallel_tool_use together
-          // with web search (its result filtering uses programmatic tool calling), so with web search on
-          // it is left out; the app still keeps only the first proposal in a reply.
-          ...(chat.actions && !chat.web ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
+          // with web search or web fetch (their result filtering uses programmatic tool calling), so with
+          // either on it is left out; the app still keeps only the first proposal in a reply.
+          ...(chat.actions && !chat.web && !chat.fetch ? { tool_choice: { type: "auto", disable_parallel_tool_use: true } } : {}),
           stream: true,
         }),
       });

@@ -1,7 +1,7 @@
 // Run with: node --test relay/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool, MAX_IMAGE_BASE64_CHARS, MAX_IMAGES, MAX_TOTAL_IMAGE_BASE64_CHARS } from "../src/index.js";
+import { createHandler, createKeyStore, validateChatBody, RelayError, PROPOSAL_TOOLS, MEMORY_CATEGORIES, UNKNOWN_KEY_REFETCH_MS, withinDailyLimit, webSearchTool, webFetchTool, MAX_IMAGE_BASE64_CHARS, MAX_IMAGES, MAX_TOTAL_IMAGE_BASE64_CHARS } from "../src/index.js";
 
 const PROJECT = "aura-test-project";
 const NOW = Date.UTC(2026, 10, 5, 12, 0, 0);
@@ -193,7 +193,7 @@ test("request bodies are validated", () => {
 
   assert.deepEqual(
     validateChatBody({ messages: [{ role: "user", content: "a", extra: 1 }, { role: "assistant", content: "b" }, { role: "user", content: "c" }] }),
-    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], actions: false, web: false }
+    { system: undefined, messages: [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], actions: false, web: false, fetch: false }
   );
   assert.throws(() => validateChatBody({ messages: [{ role: "user", content: "x" }], actions: "yes" }), RelayError);
 });
@@ -452,6 +452,25 @@ test("web search is added only when the app asks, with the relay's own cap", asy
 
   const bad = await chatWith({ web: "yes" });
   assert.equal(bad.res.status, 400);
+});
+
+test("link opening is added only when the app asks, with the relay's own caps", async () => {
+  const fetchTool = { type: "web_fetch_20260209", name: "web_fetch", max_uses: 3, max_content_tokens: 20000 };
+  const on = await chatWith({ fetch: true });
+  assert.equal(on.res.status, 200);
+  assert.deepEqual(on.sent.tools, [fetchTool]);
+
+  // With proposals: no tool_choice, for the same reason as web search.
+  const withActions = await chatWith({ fetch: true, actions: true });
+  assert.deepEqual(withActions.sent.tools.map((t) => t.name), [...PROPOSAL_TOOLS.map((t) => t.name), "web_fetch"]);
+  assert.equal(withActions.sent.tool_choice, undefined);
+
+  const all = await chatWith({ fetch: true, web: true });
+  assert.deepEqual(all.sent.tools.map((t) => t.name), ["web_search", "web_fetch"]);
+
+  assert.equal((await chatWith({ fetch: "yes" })).res.status, 400);
+  assert.equal(webFetchTool({ WEB_FETCH_MAX_USES: "500" }).max_uses, 10);
+  assert.equal(webFetchTool({ WEB_FETCH_MAX_USES: "x" }).max_uses, 3);
 });
 
 test("searches per reply come from the relay setting, within bounds", () => {

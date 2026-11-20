@@ -35,6 +35,12 @@ their own daily cap, `DAILY_SEARCH_LIMIT` (default 100 per user), when the daily
 up. Web search must also be allowed for the organization in the Claude Console, or such requests
 fail with an error from the Claude API.
 
+With `"fetch": true` (the user's "Let Claude open links you send" switch, sent only when the chat
+contains a link), the relay adds Anthropic's web fetch tool, capped at `WEB_FETCH_MAX_USES` pages per
+reply (default 3) and 20,000 tokens of text per page. It can open only addresses already in the
+conversation, and costs only the tokens of the text it reads. Web fetch must also be allowed for
+the organization in the Claude Console.
+
 Tests: `cd relay && node --test` (no packages needed).
 
 Deployment is automatic from `main` via `.github/workflows/relay.yml` once these

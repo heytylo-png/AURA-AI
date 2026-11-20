@@ -190,6 +190,16 @@ class AuraViewModel @JvmOverloads constructor(
         _webSearch.value = enabled
     }
 
+    // On by default (the user asked for it): when a message or the chat has a link, Claude may open
+    // that page. The page is fetched by Anthropic, so the site sees Anthropic, not this phone.
+    private val _linkReading = MutableStateFlow(privacyPrefs.getBoolean("link_reading_enabled", true))
+    val linkReading: StateFlow<Boolean> = _linkReading.asStateFlow()
+
+    fun setLinkReading(enabled: Boolean) {
+        privacyPrefs.edit().putBoolean("link_reading_enabled", enabled).apply()
+        _linkReading.value = enabled
+    }
+
     private val _elevenLabsVoice = MutableStateFlow(privacyPrefs.getBoolean("elevenlabs_voice", false))
     val elevenLabsVoice: StateFlow<Boolean> = _elevenLabsVoice.asStateFlow()
 
@@ -754,6 +764,7 @@ class AuraViewModel @JvmOverloads constructor(
                     sharedTodosTotal = sharedTodoTotal,
                     sharedProject = sharedProject,
                     allowWebSearch = webSearch.value,
+                    allowLinkReading = linkReading.value,
                     images = images.map { it.jpeg }
                 ).collect { state ->
                     when (state) {
@@ -765,6 +776,7 @@ class AuraViewModel @JvmOverloads constructor(
                             _streamingActivity.value = null
                         }
                         is HybridAiState.Searching -> _streamingActivity.value = "Searching the web for \u201c${state.query}\u201d\u2026"
+                        is HybridAiState.ReadingLink -> _streamingActivity.value = "Reading ${com.example.ai.ChatLinks.host(state.url)}\u2026"
                         is HybridAiState.Completed -> {
                             _isGenerating.value = false
                             _currentStreamingText.value = null

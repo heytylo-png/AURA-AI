@@ -510,6 +510,33 @@ fun SettingsScreen(
                         )
                     }
 
+                    val linkReading by viewModel.linkReading.collectAsState()
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Let Claude open links you send", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "When your chat has a link, Claude can open that page to read it (up to 3 pages a reply). " +
+                                    "Anthropic fetches the page, so the website sees Anthropic, not your phone. Claude can only open links " +
+                                    "already in the chat. Each reply's details show which links were opened.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = linkReading,
+                            onCheckedChange = viewModel::setLinkReading,
+                            enabled = cloudChatEnabled,
+                            colors = auraSwitchColors(),
+                            modifier = Modifier.testTag("link_reading_switch")
+                        )
+                    }
+
                     val elevenLabsVoice by viewModel.elevenLabsVoice.collectAsState()
                     Spacer(Modifier.height(14.dp))
                     Row(

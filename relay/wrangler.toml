@@ -19,6 +19,9 @@ DAILY_SPEAK_LIMIT = "150"
 # web search per user per day. Each search is billed by Anthropic (about $10 per 1,000).
 WEB_SEARCH_MAX_USES = "3"
 DAILY_SEARCH_LIMIT = "100"
+# Opening links (when the user's chat has one and the switch is on): pages per reply. Costs only
+# the page text Claude reads, at most 20,000 tokens a page.
+WEB_FETCH_MAX_USES = "3"
 
 # Per-user limits (requests per minute) so a loop or stolen token can't burn credits fast.
 # Spend limits in the Anthropic and ElevenLabs consoles remain the hard cap.

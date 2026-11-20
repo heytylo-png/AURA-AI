@@ -25,6 +25,7 @@ sealed interface HybridAiState {
     data class Streaming(val text: String, val modelUsed: AiModelUsed) : HybridAiState
     /** Claude is searching the web for [query] while it writes the reply. */
     data class Searching(val query: String) : HybridAiState
+    data class ReadingLink(val url: String) : HybridAiState
     data class Completed(
         val fullText: String,
         val modelUsed: AiModelUsed,
@@ -86,6 +87,8 @@ class HybridAiEngine(
         sharedProject: CloudProject? = null,
         /** The user's "Let Claude search the web" switch. */
         allowWebSearch: Boolean = false,
+        /** The user's "Let Claude open links" switch. */
+        allowLinkReading: Boolean = false,
         /** Images attached to [prompt] (JPEGs, prepared on the phone). Only Claude can read them. */
         images: List<ByteArray> = emptyList()
     ): Flow<HybridAiState> = flow {
@@ -181,6 +184,7 @@ class HybridAiEngine(
             history = history,
             allowProposals = allowProposals,
             allowWebSearch = allowWebSearch,
+            allowLinkReading = allowLinkReading,
             images = images
         ).forCloud(sharePersonalContext).copy(
             openTodos = sharedTodos.take(CloudTodos.MAX),
@@ -206,6 +210,7 @@ class HybridAiEngine(
                         emit(HybridAiState.Streaming(event.text, AiModelUsed.CLOUD))
                     }
                     is AiProviderEvent.Searching -> emit(HybridAiState.Searching(event.query))
+                    is AiProviderEvent.ReadingLink -> emit(HybridAiState.ReadingLink(event.url))
                     is AiProviderEvent.Completed -> completed = event
                     is AiProviderEvent.Error -> failure = event.message
                 }
@@ -243,7 +248,7 @@ class HybridAiEngine(
                         modelUsed = AiModelUsed.CLOUD,
                         latencyMs = done.latencyMs,
                         reasoningRationale = "Answered by ${done.modelName ?: "Claude"} via your Aura relay. " +
-                            sentSummary(history, providerRequest) + searchSummary(done.webSearches) + dropped + cutOffNote,
+                            sentSummary(history, providerRequest) + searchSummary(done.webSearches) + linkSummary(done.linksRead) + dropped + cutOffNote,
                         proposedAction = card
                     )
                 )
@@ -344,6 +349,14 @@ class HybridAiEngine(
         val shown = queries.take(MAX_QUERIES_SHOWN).joinToString(", ") { "\"$it\"" }
         val more = if (queries.size > MAX_QUERIES_SHOWN) " and ${queries.size - MAX_QUERIES_SHOWN} more" else ""
         return " Claude searched the web ${if (queries.size == 1) "once" else "${queries.size} times"}: $shown$more."
+    }
+
+    /** Says which links Claude opened: the page's site was asked for it, through Anthropic. */
+    internal fun linkSummary(links: List<String>): String {
+        if (links.isEmpty()) return ""
+        val shown = links.take(MAX_QUERIES_SHOWN).joinToString(", ") { it }
+        val more = if (links.size > MAX_QUERIES_SHOWN) " and ${links.size - MAX_QUERIES_SHOWN} more" else ""
+        return " Claude opened ${if (links.size == 1) "a link" else "${links.size} links"}: $shown$more."
     }
 
     /** The pages Claude cited, as links under the reply. */
