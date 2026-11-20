@@ -210,6 +210,28 @@ class ClaudeRelayProviderTest {
     }
 
     @Test
+    fun `only the first proposal in a reply is kept`() = runBlocking {
+        // With web search on, the relay can't ask Claude for one proposal per reply (the Claude API
+        // refuses that combination), so a reply may carry two in parallel. Only the first counts.
+        fun proposal(index: Int, name: String, input: String) = arrayOf(
+            JSONObject().put("type", "content_block_start").put("index", index)
+                .put("content_block", JSONObject().put("type", "tool_use").put("id", "t$index").put("name", name).put("input", JSONObject())).toString(),
+            JSONObject().put("type", "content_block_delta").put("index", index)
+                .put("delta", JSONObject().put("type", "input_json_delta").put("partial_json", input)).toString(),
+            JSONObject().put("type", "content_block_stop").put("index", index).toString()
+        )
+        server.enqueue(sse(
+            delta("Two ideas."),
+            *proposal(1, "propose_save_memory", "{\"text\":\"Likes tea\"}"),
+            *proposal(2, "propose_create_project", "{\"title\":\"Garden\"}"),
+            """{"type":"message_stop"}"""
+        ))
+        val done = provider().generateStream(request.copy(allowProposals = true, allowWebSearch = true)).toList().last() as AiProviderEvent.Completed
+        assertEquals("propose_save_memory", done.toolCall?.name)
+        assertEquals("Likes tea", JSONObject(done.toolCall!!.inputJson).getString("text"))
+    }
+
+    @Test
     fun `a reply that is only a proposal still completes`() = runBlocking {
         server.enqueue(sse(*toolEvents("propose_create_project", "{\"title\":\"Garden\"}"), """{"type":"message_stop"}"""))
         val done = provider().generateStream(request.copy(allowProposals = true)).toList().last() as AiProviderEvent.Completed

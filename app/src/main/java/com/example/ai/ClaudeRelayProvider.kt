@@ -112,7 +112,8 @@ class ClaudeRelayProvider(
                 return@flow
             }
             val text = StringBuilder()
-            // At most one proposal per reply (the relay disables parallel tool use); later ones are ignored.
+            // At most one proposal per reply: only the first is kept, later ones are ignored. (The relay also
+            // asks Claude for one, except with web search on, where the Claude API doesn't allow that.)
             var toolIndex: Int? = null
             var toolName: String? = null
             val toolInput = StringBuilder()

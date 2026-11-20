@@ -439,10 +439,12 @@ test("web search is added only when the app asks, with the relay's own cap", asy
   assert.deepEqual(on.sent.tools, [{ type: "web_search_20260209", name: "web_search", max_uses: 3 }]);
   assert.equal(on.sent.tool_choice, undefined);
 
-  // Together with the proposal tools: both are there, and the one-proposal rule still applies.
+  // Together with the proposal tools: both are there, and no tool_choice. The Claude API answers
+  // 400 "disable_parallel_tool_use: true cannot be used with programmatic tool calling" otherwise
+  // (seen on the phone); the app keeps only the first proposal in a reply.
   const both = await chatWith({ web: true, actions: true });
   assert.deepEqual(both.sent.tools.map((t) => t.name), [...PROPOSAL_TOOLS.map((t) => t.name), "web_search"]);
-  assert.deepEqual(both.sent.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+  assert.equal(both.sent.tool_choice, undefined);
 
   // Whatever else the app sends is ignored.
   const sneaky = await chatWith({ web: true, tools: [{ type: "web_fetch_20260209", name: "web_fetch" }], max_uses: 50 });
