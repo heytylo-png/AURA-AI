@@ -1,0 +1,4 @@
+git apply --check integration/DashboardScreen.patch # dry run
+git apply integration/DashboardScreen.patch git apply integration/MainScreen.patch
+./gradlew testDebugUnitTest
+./gradlew assembleDebug
